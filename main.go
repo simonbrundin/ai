@@ -45,10 +45,26 @@ const (
 	opencodeIssuePrompt  = "--model opencode/minimax-m2.5-free --prompt \"/issue\""
 )
 
+const (
+	phaseDialogWidth  = 40
+	phaseDialogHeight = 12
+)
+
 var (
 	commandNames   = []string{"Skriv tester", "Implementera", "Refactor", "Dokumentera", "Skapa PR"}
 	commandAliases = []string{"/tdd", "/implement", "/refactor", "/docs", "/pr"}
 )
+
+var phaseLabels = []string{"tester", "implementation", "refactor", "docs", "user_test", "pr"}
+
+var phaseDescriptions = map[string]string{
+	"tester":         "Issue är i testfas",
+	"implementation": "Issue är i implementationsfas",
+	"refactor":       "Issue är i refaktoringsfas",
+	"docs":           "Issue är i dokumentationsfas",
+	"user_test":      "Issue är i användartestfas",
+	"pr":             "Issue är i PR-fas",
+}
 
 var (
 	titleStyle = lipgloss.NewStyle().
@@ -212,6 +228,10 @@ type model struct {
 	newIssueDialogMode    string
 	newIssueErrorMessage  string
 	newIssueFilterText    string
+
+	// Phase Dialog (Issue #30)
+	showPhaseDialog bool
+	selectedPhase   int
 }
 
 const (
@@ -362,6 +382,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.newIssueFilterText = ""
 				m.newIssueSelectedRepo = 0
 			}
+			if m.showPhaseDialog {
+				m.showPhaseDialog = false
+				m.selectedPhase = -1
+			}
 			return m, nil
 		case "tab":
 			m.currentTab = (m.currentTab + 1) % numTabs
@@ -377,10 +401,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "o":
 			return m, m.openSelectedIssueInBrowser()
+		case "p":
+			if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+				m.openPhaseDialog()
+			}
+			return m, nil
 		case "d":
 			m.showCloseIssueDialog()
 			return m, nil
 		case "y", "enter":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" {
+				m.executeNewIssueSelection()
+				return m, nil
+			}
 			if m.showCommandDialog {
 				m.executeSelectedCommand()
 				return m, nil
@@ -415,6 +448,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && m.newIssueSelectedRepo > 0 {
 				m.newIssueSelectedRepo--
 			}
+			if m.showPhaseDialog && m.selectedPhase > 0 {
+				m.selectedPhase--
+			}
 			return m, nil
 		case "down":
 			if m.showCommandDialog && m.selectedCommand < len(commandNames)-1 {
@@ -422,6 +458,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && m.newIssueSelectedRepo < len(m.newIssueFilteredRepos)-1 {
 				m.newIssueSelectedRepo++
+			}
+			if m.showPhaseDialog && m.selectedPhase < len(phaseLabels)-1 {
+				m.selectedPhase++
 			}
 			return m, nil
 		}
@@ -472,6 +511,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.showPhaseDialog {
+			if msg.String() == "enter" || msg.String() == "return" {
+				m.executePhaseSelection()
+				return m, nil
+			}
+			if len(msg.String()) == 1 {
+				key := msg.String()
+				if key >= "1" && key <= "6" {
+					m.selectedPhase = int(key[0] - '1')
+					m.executePhaseSelection()
+					return m, nil
+				}
+			}
+			if msg.String() == "n" {
+				m.showPhaseDialog = false
+				m.selectedPhase = -1
+				return m, nil
+			}
+			return m, nil
+		}
 		if len(msg.String()) == 1 {
 			key := msg.String()
 			if key >= "1" && key <= "9" {
@@ -506,6 +565,49 @@ func (m *model) moveToPreviousIssue() {
 			m.selectedIssue--
 		}
 	}
+}
+
+func (m *model) openPhaseDialog() {
+	if m.currentTab != tabIssues || len(m.issues) == 0 || m.selectedIssue < 0 || m.selectedIssue >= len(m.issues) {
+		return
+	}
+	m.showPhaseDialog = true
+	m.selectedPhase = 0
+}
+
+func (m *model) executePhaseSelection() {
+	if !m.showPhaseDialog || m.selectedPhase < 0 || m.selectedPhase >= len(phaseLabels) {
+		m.showPhaseDialog = false
+		m.selectedPhase = -1
+		return
+	}
+
+	if m.selectedIssue < 0 || m.selectedIssue >= len(m.issues) {
+		m.showPhaseDialog = false
+		m.selectedPhase = -1
+		return
+	}
+
+	phaseLabel := phaseLabels[m.selectedPhase]
+
+	issue := &m.issues[m.selectedIssue]
+	alreadyHasLabel := false
+	for _, l := range issue.Labels {
+		if l == phaseLabel {
+			alreadyHasLabel = true
+			break
+		}
+	}
+
+	err := addIssueLabel(issue.Repo, issue.Number, phaseLabel)
+	if err != nil {
+		m.err = fmt.Errorf("failed to add label: %w", err)
+	} else if !alreadyHasLabel {
+		issue.Labels = append(issue.Labels, phaseLabel)
+	}
+
+	m.showPhaseDialog = false
+	m.selectedPhase = -1
 }
 
 func (m *model) openSelectedIssueInBrowser() tea.Cmd {
@@ -546,21 +648,27 @@ func (m *model) executeSelectedCommand() {
 	}
 
 	issue := m.issues[m.selectedIssue]
-	command := commandAliases[m.selectedCommand]
 	issueNum := issue.Number
+	command := commandAliases[m.selectedCommand]
 
-	cmd := exec.Command("tmux", "new-window", "-a", "-t", "0", "-n", fmt.Sprintf("opencode %s %d", command, issueNum),
-		"bash", "-c", fmt.Sprintf("opencode --prompt '%s %d'; echo; echo 'Press Enter to close...'; read", command, issueNum))
-
-	err := cmd.Run()
-	if err != nil {
-		m.err = fmt.Errorf("failed to execute command: %w", err)
+	cmd := exec.Command("tmux", "new-window", "-d", "-n", fmt.Sprintf("opencode-%s-%d", command, issueNum))
+	if err := cmd.Run(); err != nil {
+		m.err = fmt.Errorf("failed to create tmux window: %w", err)
+		m.showCommandDialog = false
+		m.selectedCommand = -1
+		return
 	}
 
-	err = closeGitHubIssue(issue.Repo, issueNum)
-	if err != nil {
-		m.err = fmt.Errorf("failed to close issue: %w", err)
+	prompt := fmt.Sprintf("--model opencode/minimax-m2.5-free --prompt \"%s %d\"", command, issueNum)
+	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, prompt)
+	cmd = exec.Command("tmux", "send-keys", "-t", fmt.Sprintf("opencode-%s-%d", command, issueNum), fullCommand, "Enter")
+	if err := cmd.Run(); err != nil {
+		m.err = fmt.Errorf("failed to run opencode-secure: %w", err)
 	}
+
+	windowName := fmt.Sprintf("opencode-%s-%d", command, issueNum)
+	selectCmd := exec.Command("bash", "-c", fmt.Sprintf("tmux select-window -t %q", windowName))
+	_ = selectCmd.Run()
 
 	m.showCommandDialog = false
 	m.selectedCommand = -1
@@ -593,6 +701,10 @@ func (m *model) View() string {
 
 	if m.showCommandDialog {
 		return m.renderCommandDialog(s.String())
+	}
+
+	if m.showPhaseDialog {
+		return m.renderPhaseDialog(s.String())
 	}
 
 	if m.showHelp {
@@ -760,6 +872,7 @@ func (m *model) renderFooter() string {
 		hints = append(hints, "o: open")
 		hints = append(hints, "d: done")
 		hints = append(hints, "n: new")
+		hints = append(hints, "p: phase")
 	}
 
 	hintStr := hints[0]
@@ -869,6 +982,39 @@ func (m *model) renderCommandDialog(content string) string {
 	commandContent := commandDialogStyle.Render(s.String())
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, commandContent)
+}
+
+func (m *model) renderPhaseDialog(content string) string {
+	var s strings.Builder
+
+	issueNum := 0
+	issueTitle := ""
+	if m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+		issueNum = m.issues[m.selectedIssue].Number
+		issueTitle = m.issues[m.selectedIssue].Title
+	}
+
+	s.WriteString(commandDialogTitleStyle.Render("Välj fas för issue #" + fmt.Sprint(issueNum)))
+	s.WriteString("\n\n")
+	s.WriteString(commandDialogItemStyle.Render("  " + truncate(issueTitle, 30)))
+	s.WriteString("\n\n")
+
+	for i, phase := range phaseLabels {
+		desc := phaseDescriptions[phase]
+		if i == m.selectedPhase {
+			s.WriteString(commandDialogSelectedStyle.Render(fmt.Sprintf("  > %d. %s ", i+1, desc)))
+		} else {
+			s.WriteString(commandDialogItemStyle.Render(fmt.Sprintf("    %d. %s", i+1, desc)))
+		}
+		s.WriteString("\n")
+	}
+
+	s.WriteString("\n")
+	s.WriteString(commandDialogHintStyle.Render("  Enter: Välj  |  ↑↓: Navigera  |  1-6: Snabbval  |  Esc: Avbryt"))
+
+	phaseContent := commandDialogStyle.Render(s.String())
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, phaseContent)
 }
 
 func truncate(s string, maxLen int) string {
@@ -1064,6 +1210,20 @@ func closeGitHubIssue(repo string, number int) error {
 	return nil
 }
 
+// addIssueLabel adds a label to an issue in GitHub using gh CLI
+func addIssueLabel(repo string, number int, label string) error {
+	cmd := exec.Command("gh", "issue", "edit", "--repo", repo, fmt.Sprintf("%d", number), "--add-label", label)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		errStr := string(out)
+		if strings.Contains(errStr, "not found") {
+			return fmt.Errorf("issue #%d not found in %s", number, repo)
+		}
+		return formatGHError(fmt.Errorf("%s: %s", err.Error(), errStr))
+	}
+	return nil
+}
+
 // =============================================================================
 // New Issue Dialog (Issue #27)
 // =============================================================================
@@ -1213,7 +1373,11 @@ func (m *model) renderNewIssueDialog(width, height int) string {
 				prefix = " > "
 				style = selectedItemStyle
 			}
-			content += style.Render(fmt.Sprintf("%s%s", prefix, repo)) + "\n"
+			repoName := repo
+			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+				repoName = repo[idx+1:]
+			}
+			content += style.Render(fmt.Sprintf("%s%s", prefix, repoName)) + "\n"
 		}
 
 		if len(m.newIssueFilteredRepos) == 0 {
