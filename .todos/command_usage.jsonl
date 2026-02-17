@@ -1,0 +1,2 @@
+{"ts":"2026-02-17T16:54:25.101280032+01:00","cmd":"init","session":"ses_e19dd5","ok":true,"dur_ms":111}
+{"ts":"2026-02-17T16:55:53.412442337+01:00","cmd":"list","flags":{"json":"true","limit":"500","status":"[\"open,in_progress,in_review\"]"},"session":"ses_e19dd5","ok":true,"dur_ms":23}

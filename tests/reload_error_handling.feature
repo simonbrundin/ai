@@ -8,18 +8,18 @@ Feature: Reload Error Handling
 
   Scenario: Reload fails for one repository
     Given I have multiple GitHub repositories
+    And fetching issues from "simonbrundin/crossplane-tutorial" will fail
     When I trigger a reload
-    And fetching issues from "simonbrundin/crossplane-tutorial" fails
     Then I should see an error message in the main view
     And the error should not render as nested UI (box within box)
 
   Scenario: Reload fails for multiple repositories
     Given I have multiple GitHub repositories
-    When I trigger a reload
-    And fetching issues from multiple repos fails:
+    And fetching issues from multiple repos will fail:
       | repo                         |
       | simonbrundin/crossplane     |
       | simonbrundin/nonexistent    |
+    When I trigger a reload
     Then I should see an error message listing all failed repos
     And the error should be displayed inline in the main content area
 
@@ -32,9 +32,9 @@ Feature: Reload Error Handling
 
   Scenario: Partial failure - some repos succeed, some fail
     Given I have multiple GitHub repositories
+    And "simonbrundin/ai" will fetch successfully
+    But "simonbrundin/crossplane-tutorial" will fail
     When I trigger a reload
-    And "simonbrundin/ai" fetches successfully
-    But "simonbrundin/crossplane-tutorial" fails
     Then I should see issues from "simonbrundin/ai"
     And I should see a warning about "simonbrundin/crossplane-tutorial" failure
     And the warning should be inline, not nested

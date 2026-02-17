@@ -1,5 +1,10 @@
 # AGENTS.md - Agent Coding Guidelines for ai
 
+## MANDATORY: Use td for Task Management
+
+You must run td usage --new-session at conversation start (or after /clear) to see current work.
+Use td usage -q for subsequent reads.
+
 ## Overview
 
 This is a Go-based Terminal UI application that monitors OpenCode agents and GitHub issues. It uses Bubble Tea for the TUI framework and Godog for BDD testing.
