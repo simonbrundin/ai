@@ -235,6 +235,21 @@ const (
 - BDD tests use real functions (`agent.FilterActive`) with mock data input
 - When filtering is disabled (`activeOnly=false`), return all agents unchanged
 
+### TUI State Management
+
+- Add feature state to model struct for new functionality
+- Use toggle keys (e.g., 'a' for active filter) in Update() method
+- Display feature state in footer for user awareness
+
+### TUI Rendering Best Practices
+
+- Split large `render*` functions by responsibility:
+  - `renderContent()` - orchestrator that chooses view
+  - `renderAgentsView()` - agents tab rendering
+  - `renderIssuesView()` - issues tab rendering
+- Avoid duplicate conditional checks in the same function
+- Test rendering logic separately from UI framework
+
 ## Issue #11: Deterministic Issue List
 
 - Go map iteration is non-deterministic - never rely on iteration order
