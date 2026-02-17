@@ -35,6 +35,12 @@ var (
 			Bold(true)
 )
 
+const (
+	specialPathStart    = "start"
+	specialPathStdio    = "--stdio"
+	specialPathWildcard = "**"
+)
+
 type model struct {
 	agents  []agent.Agent
 	issues  []issue
@@ -140,7 +146,7 @@ func truncate(s string, maxLen int) string {
 }
 
 func getRepoName(path string) string {
-	if path == "" || path == "**" || path == "start" || path == "--stdio" {
+	if path == "" || path == specialPathWildcard || path == specialPathStart || path == specialPathStdio {
 		return path
 	}
 	parts := strings.Split(path, "/")
@@ -175,8 +181,7 @@ func (m *model) refresh() tea.Msg {
 }
 
 func fetchAllIssues() ([]issue, error) {
-	cmd := exec.Command("gh", "repo", "list", "--limit", "50", "--json", "nameWithOwner")
-	out, err := cmd.Output()
+	out, err := runGHCommand("repo", "list", "--limit", "50", "--json", "nameWithOwner")
 	if err != nil {
 		return nil, formatGHError(err)
 	}
@@ -189,12 +194,11 @@ func fetchAllIssues() ([]issue, error) {
 	}
 
 	var allIssues []issue
-	var errors []string
+	var repoErrors []string
 	for _, repo := range repos {
-		cmd := exec.Command("gh", "issue", "list", "--repo", repo.NameWithOwner, "--limit", "10")
-		out, cmdErr := cmd.Output()
+		out, cmdErr := runGHCommand("issue", "list", "--repo", repo.NameWithOwner, "--limit", "10")
 		if cmdErr != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", repo.NameWithOwner, cmdErr))
+			repoErrors = append(repoErrors, fmt.Sprintf("%s: %v", repo.NameWithOwner, cmdErr))
 			continue
 		}
 		issues := parseIssues(string(out))
@@ -204,19 +208,23 @@ func fetchAllIssues() ([]issue, error) {
 		allIssues = append(allIssues, issues...)
 	}
 
-	if len(errors) > 0 {
-		return allIssues, fmt.Errorf("failed to fetch issues from repos: %s", strings.Join(errors, "; "))
+	if len(repoErrors) > 0 {
+		return allIssues, fmt.Errorf("failed to fetch issues from repos: %s", strings.Join(repoErrors, "; "))
 	}
 	return allIssues, nil
 }
 
 func fetchGitHubIssues(repo string) ([]issue, error) {
-	cmd := exec.Command("gh", "issue", "list", "--repo", repo, "--limit", "20")
-	out, err := cmd.Output()
+	out, err := runGHCommand("issue", "list", "--repo", repo, "--limit", "20")
 	if err != nil {
 		return nil, formatGHError(err)
 	}
 	return parseIssues(string(out)), nil
+}
+
+func runGHCommand(args ...string) ([]byte, error) {
+	cmd := exec.Command("gh", args...)
+	return cmd.Output()
 }
 
 func parseIssues(output string) []issue {
