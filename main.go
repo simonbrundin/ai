@@ -22,8 +22,6 @@ const (
 )
 
 const (
-	repoLimit   = 20
-	issueLimit  = 5
 	searchLimit = 100
 )
 
@@ -541,35 +539,31 @@ func (m *model) refresh() tea.Msg {
 }
 
 func fetchAllIssues() ([]issue, error) {
-	out, err := runGHCommand("repo", "list", "--limit", "50", "--json", "nameWithOwner")
+	out, err := runGHCommand("search", "issues", "--owner", "simonbrundin", "--state", "open", "--limit", fmt.Sprintf("%d", searchLimit), "--json", "number,title,state,repository")
 	if err != nil {
 		return nil, formatGHError(err)
 	}
 
-	var repos []struct {
-		NameWithOwner string `json:"nameWithOwner"`
+	var searchResults []struct {
+		Number     int    `json:"number"`
+		Title      string `json:"title"`
+		State      string `json:"state"`
+		Repository struct {
+			FullName string `json:"nameWithOwner"`
+		} `json:"repository"`
 	}
-	if err := json.Unmarshal(out, &repos); err != nil {
+	if err := json.Unmarshal(out, &searchResults); err != nil {
 		return nil, err
 	}
 
 	var allIssues []issue
-	var failedRepos []string
-	for _, repo := range repos {
-		out, cmdErr := runGHCommand("issue", "list", "--repo", repo.NameWithOwner, "--limit", "10")
-		if cmdErr != nil {
-			failedRepos = append(failedRepos, repo.NameWithOwner)
-			continue
-		}
-		issues := parseIssues(string(out))
-		for i := range issues {
-			issues[i].Repo = repo.NameWithOwner
-		}
-		allIssues = append(allIssues, issues...)
-	}
-
-	if len(failedRepos) > 0 {
-		return allIssues, fmt.Errorf("failed to fetch from repos: %s", strings.Join(failedRepos, ", "))
+	for _, result := range searchResults {
+		allIssues = append(allIssues, issue{
+			Number: result.Number,
+			Title:  result.Title,
+			State:  result.State,
+			Repo:   result.Repository.FullName,
+		})
 	}
 
 	return allIssues, nil
