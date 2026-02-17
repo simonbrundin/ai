@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"ai-tui/agent"
 	"github.com/charmbracelet/bubbletea"
@@ -41,12 +42,15 @@ const (
 	specialPathWildcard = "**"
 )
 
+var spinners = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 type model struct {
 	agents  []agent.Agent
 	issues  []issue
 	loading bool
 	err     error
 	repo    string
+	spinner int
 }
 
 type issue struct {
@@ -66,16 +70,26 @@ func main() {
 }
 
 func (m *model) Init() tea.Cmd {
-	return m.refresh
+	return tea.Batch(m.refresh, tick())
+}
+
+func tick() tea.Cmd {
+	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+		return t
+	})
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case time.Time:
+		m.spinner = (m.spinner + 1) % len(spinners)
+		return m, tick()
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "r":
+			m.loading = true
 			return m, m.refresh
 		}
 	case refreshComplete:
@@ -93,16 +107,13 @@ func (m *model) View() string {
 	s := titleStyle.Render("🤖 AI Monitor") + "\n\n"
 
 	if m.loading {
-		s += statusStyle.Render("Loading...")
+		spinner := spinners[m.spinner]
+		s += statusStyle.Render(spinner + " Loading...")
 		return s
 	}
 
-	if m.err != nil {
-		s += errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n\n"
-	}
-
 	s += sectionTitleStyle.Render("🤖 Running Agents") + "\n"
-	if m.err == nil && len(m.agents) == 0 {
+	if len(m.agents) == 0 && m.err == nil {
 		s += itemStyle.Render("  No agents running") + "\n"
 	} else if len(m.agents) > 0 {
 		seen := make(map[string]bool)
@@ -118,7 +129,7 @@ func (m *model) View() string {
 	}
 
 	s += "\n" + sectionTitleStyle.Render("📋 GitHub Issues (alla repos)") + "\n"
-	if m.err == nil && len(m.issues) == 0 {
+	if len(m.issues) == 0 && m.err == nil {
 		s += itemStyle.Render("  No issues found") + "\n"
 	} else if len(m.issues) > 0 {
 		for _, i := range m.issues {
@@ -132,6 +143,10 @@ func (m *model) View() string {
 			}
 			s += itemStyle.Render(fmt.Sprintf("  #%d %s%s (%s)", i.Number, truncate(i.Title, 30), labels, repoName)) + "\n"
 		}
+	}
+
+	if m.err != nil {
+		s += "\n" + errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n"
 	}
 
 	s += "\n" + statusStyle.Render("r: refresh | q: quit")
@@ -166,18 +181,15 @@ func (m *model) refresh() tea.Msg {
 	agents, err := agent.DetectAgents()
 	issues, fetchErr := fetchAllIssues()
 
-	var combinedErr error
 	if err != nil {
-		combinedErr = fmt.Errorf("agent detection failed: %w", err)
+		return refreshComplete{agents: agents, issues: issues, err: fmt.Errorf("agent detection failed: %w", err)}
 	}
+
 	if fetchErr != nil {
-		if combinedErr != nil {
-			combinedErr = fmt.Errorf("%v; github: %w", combinedErr, fetchErr)
-		} else {
-			combinedErr = fmt.Errorf("github error: %w", fetchErr)
-		}
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", fetchErr)
 	}
-	return refreshComplete{agents: agents, issues: issues, err: combinedErr}
+
+	return refreshComplete{agents: agents, issues: issues, err: nil}
 }
 
 func fetchAllIssues() ([]issue, error) {
@@ -194,11 +206,11 @@ func fetchAllIssues() ([]issue, error) {
 	}
 
 	var allIssues []issue
-	var repoErrors []string
+	var failedRepos []string
 	for _, repo := range repos {
 		out, cmdErr := runGHCommand("issue", "list", "--repo", repo.NameWithOwner, "--limit", "10")
 		if cmdErr != nil {
-			repoErrors = append(repoErrors, fmt.Sprintf("%s: %v", repo.NameWithOwner, cmdErr))
+			failedRepos = append(failedRepos, repo.NameWithOwner)
 			continue
 		}
 		issues := parseIssues(string(out))
@@ -208,9 +220,10 @@ func fetchAllIssues() ([]issue, error) {
 		allIssues = append(allIssues, issues...)
 	}
 
-	if len(repoErrors) > 0 {
-		return allIssues, fmt.Errorf("failed to fetch issues from repos: %s", strings.Join(repoErrors, "; "))
+	if len(failedRepos) > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: failed to fetch from repos: %s\n", strings.Join(failedRepos, ", "))
 	}
+
 	return allIssues, nil
 }
 
