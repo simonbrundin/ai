@@ -285,3 +285,49 @@ const (
   func calculateMaxTitleWidth(terminalWidth, labelsWidth int) int
   ```
 - Minimum bounds ensure usability on narrow terminals
+
+## Issue #16: Vim Navigation in Issue List
+
+### TUI Selection State
+
+- Add `selectedIssue int` to model struct for tracking selected row
+- Use global index when rendering grouped lists:
+  ```go
+  globalIndex := 0
+  for _, repoName := range repoNames {
+      for _, i := range grouped[repoName] {
+          if globalIndex == m.selectedIssue {
+              // Render with selection style
+          }
+          globalIndex++
+      }
+  }
+  ```
+
+### Visual Selection Indicator
+
+- Use distinct style for selected items:
+  ```go
+  selectedItemStyle = lipgloss.NewStyle().
+      Foreground(lipgloss.Color("205")).
+      Bold(true)
+  ```
+- Add prefix marker: `"> "` for selected, `"    "` for unselected
+
+### Extracting Key Handler Logic
+
+- Extract keyboard handler logic to helper methods:
+  ```go
+  func (m *model) moveToNextIssue()
+  func (m *model) moveToPreviousIssue()
+  func (m *model) openSelectedIssueInBrowser() tea.Cmd
+  ```
+- Keeps Update() method clean and focused on message dispatch
+
+### Cross-Platform Browser Opening
+
+- Use fallback commands for different platforms:
+  ```go
+  var browserCommands = []string{"xdg-open", "gnome-open", "firefox", "chromium-browser", "google-chrome"}
+  ```
+- Try each command until one succeeds, ignore errors if all fail

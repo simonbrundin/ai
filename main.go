@@ -22,10 +22,13 @@ const (
 )
 
 const (
-	searchLimit        = 100
-	issuePrefixWidth   = 10
-	issuePadding       = 2
-	issueMinTitleWidth = 10
+	searchLimit          = 100
+	issuePrefixWidth     = 10
+	issuePadding         = 2
+	issueMinTitleWidth   = 10
+	dialogWidth          = 50
+	dialogHeight         = 12
+	confirmTitleTruncate = 30
 )
 
 var (
@@ -65,6 +68,11 @@ var (
 			Foreground(lipgloss.Color("252")).
 			Padding(0, 2)
 
+	selectedItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("205")).
+				Bold(true).
+				Padding(0, 2)
+
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("141"))
 
@@ -94,6 +102,26 @@ var (
 	helpKeyStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("205"))
 
+	confirmDialogStyle = lipgloss.NewStyle().
+				Width(50).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("205")).
+				Foreground(lipgloss.Color("252")).
+				Background(lipgloss.Color("236")).
+				Padding(1)
+
+	confirmDialogTitleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("205")).
+				Bold(true).
+				Padding(0, 0, 1, 0)
+
+	confirmDialogOptionStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("252"))
+
+	confirmDialogHighlightStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("205")).
+					Bold(true)
+
 	boxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("205")).
@@ -111,21 +139,26 @@ const (
 
 var spinners = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+var browserCommands = []string{"xdg-open", "gnome-open", "firefox", "chromium-browser", "google-chrome"}
+
 type model struct {
-	agents       []agent.Agent
-	issues       []issue
-	loading      bool
-	err          error
-	repo         string
-	spinner      int
-	currentTab   int
-	showHelp     bool
-	helpSearch   string
-	helpMatches  []string
-	width        int
-	height       int
-	ready        bool
-	filterActive bool
+	agents            []agent.Agent
+	issues            []issue
+	loading           bool
+	err               error
+	repo              string
+	spinner           int
+	currentTab        int
+	showHelp          bool
+	helpSearch        string
+	helpMatches       []string
+	width             int
+	height            int
+	ready             bool
+	filterActive      bool
+	selectedIssue     int
+	issueURL          string
+	showConfirmDialog bool
 }
 
 const (
@@ -146,6 +179,9 @@ var allCommands = []struct {
 	{"shift+tab", "prev", "Previous tab"},
 	{"r", "refresh", "Refresh data"},
 	{"a", "active", "Toggle active filter"},
+	{"j", "down", "Next issue (vim)"},
+	{"k", "up", "Previous issue (vim)"},
+	{"o", "open", "Open issue in browser"},
 	{"q", "quit", "Exit application"},
 	{"?", "help", "Show help"},
 	{"esc", "close", "Close help"},
@@ -260,12 +296,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showHelp = false
 				m.helpSearch = ""
 			}
+			if m.showConfirmDialog {
+				m.showConfirmDialog = false
+			}
 			return m, nil
 		case "tab":
 			m.currentTab = (m.currentTab + 1) % numTabs
 			return m, nil
 		case "shift+tab":
 			m.currentTab = (m.currentTab - 1 + numTabs) % numTabs
+			return m, nil
+		case "j":
+			m.moveToNextIssue()
+			return m, nil
+		case "k":
+			m.moveToPreviousIssue()
+			return m, nil
+		case "o":
+			return m, m.openSelectedIssueInBrowser()
+		case "d":
+			m.showCloseIssueDialog()
+			return m, nil
+		case "y", "enter":
+			m.confirmAndCloseIssue()
+			return m, nil
+		case "n":
+			m.showConfirmDialog = false
 			return m, nil
 		}
 		if m.showHelp {
@@ -300,6 +356,49 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) moveToNextIssue() {
+	if m.currentTab == tabIssues && len(m.issues) > 0 {
+		if m.selectedIssue < len(m.issues)-1 {
+			m.selectedIssue++
+		}
+	}
+}
+
+func (m *model) moveToPreviousIssue() {
+	if m.currentTab == tabIssues && len(m.issues) > 0 {
+		if m.selectedIssue > 0 {
+			m.selectedIssue--
+		}
+	}
+}
+
+func (m *model) openSelectedIssueInBrowser() tea.Cmd {
+	if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue < len(m.issues) {
+		issue := m.issues[m.selectedIssue]
+		m.issueURL = fmt.Sprintf("https://github.com/%s/issues/%d", issue.Repo, issue.Number)
+		return openBrowser(m.issueURL)
+	}
+	return nil
+}
+
+func (m *model) showCloseIssueDialog() {
+	if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+		m.showConfirmDialog = true
+	}
+}
+
+func (m *model) confirmAndCloseIssue() {
+	if !m.showConfirmDialog || m.selectedIssue < 0 || m.selectedIssue >= len(m.issues) {
+		return
+	}
+	issue := m.issues[m.selectedIssue]
+	err := closeGitHubIssue(issue.Repo, issue.Number)
+	if err != nil {
+		m.err = fmt.Errorf("failed to close issue: %w", err)
+	}
+	m.showConfirmDialog = false
+}
+
 func (m *model) View() string {
 	if !m.ready {
 		return "Loading..."
@@ -320,6 +419,10 @@ func (m *model) View() string {
 	s.WriteString("\n")
 
 	s.WriteString(m.renderFooter())
+
+	if m.showConfirmDialog {
+		return m.renderConfirmDialog(s.String())
+	}
 
 	if m.showHelp {
 		return m.renderHelpOverlay(s.String())
@@ -427,6 +530,8 @@ func (m *model) renderIssuesView() string {
 		grouped := groupIssuesByRepo(m.issues)
 		repoNames := sortedRepoKeys(grouped)
 
+		globalIndex := 0
+
 		for _, repoName := range repoNames {
 			issues := grouped[repoName]
 			s.WriteString(itemStyle.Render(fmt.Sprintf("  📁 %s", repoName)))
@@ -439,8 +544,18 @@ func (m *model) renderIssuesView() string {
 					labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
 				}
 				maxTitleWidth := calculateMaxTitleWidth(m.width, labelsWidth)
-				s.WriteString(itemStyle.Render(fmt.Sprintf("    #%d %s%s", i.Number, truncate(i.Title, maxTitleWidth), labels)))
+
+				prefix := "    "
+				currentStyle := itemStyle
+				if globalIndex == m.selectedIssue {
+					prefix = "  > "
+					currentStyle = selectedItemStyle
+				}
+
+				s.WriteString(currentStyle.Render(fmt.Sprintf("%s#%d %s%s", prefix, i.Number, truncate(i.Title, maxTitleWidth), labels)))
 				s.WriteString("\n")
+
+				globalIndex++
 			}
 		}
 	}
@@ -459,6 +574,13 @@ func (m *model) renderFooter() string {
 		filterStatus,
 		"q: quit",
 		"?: help",
+	}
+
+	// Add vim navigation hints when on Issues tab
+	if m.currentTab == tabIssues && len(m.issues) > 0 {
+		hints = append(hints, "j/k: nav")
+		hints = append(hints, "o: open")
+		hints = append(hints, "d: done")
 	}
 
 	hintStr := hints[0]
@@ -502,6 +624,40 @@ func (m *model) renderHelpOverlay(content string) string {
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpContent)
+}
+
+func (m *model) renderConfirmDialog(content string) string {
+	var s strings.Builder
+
+	issueNum := 0
+	issueTitle := ""
+	if m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+		issueNum = m.issues[m.selectedIssue].Number
+		issueTitle = m.issues[m.selectedIssue].Title
+	}
+
+	s.WriteString(confirmDialogTitleStyle.Render("Stäng issue i GitHub"))
+	s.WriteString("\n\n")
+	s.WriteString(confirmDialogOptionStyle.Render(fmt.Sprintf("  Issue #%d: %s", issueNum, truncate(issueTitle, confirmTitleTruncate))))
+	s.WriteString("\n\n")
+	s.WriteString(confirmDialogOptionStyle.Render("  Bekräfta?"))
+	s.WriteString("\n\n")
+	s.WriteString(confirmDialogHighlightStyle.Render("  [Ja] Enter / y"))
+	s.WriteString("\n")
+	s.WriteString(confirmDialogOptionStyle.Render("  [Nej] n / Esc"))
+
+	confirmContent := confirmDialogStyle.Render(s.String())
+
+	actualDialogWidth := dialogWidth
+	actualDialogHeight := dialogHeight
+	if actualDialogWidth > m.width-4 {
+		actualDialogWidth = m.width - 4
+	}
+	if actualDialogHeight > m.height-4 {
+		actualDialogHeight = m.height - 4
+	}
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, confirmContent)
 }
 
 func truncate(s string, maxLen int) string {
@@ -659,4 +815,32 @@ func formatGHError(err error) error {
 	default:
 		return fmt.Errorf("gh error: %w", err)
 	}
+}
+
+// openBrowser opens a URL in the default browser
+func openBrowser(url string) tea.Cmd {
+	return func() tea.Msg {
+		for _, cmd := range browserCommands {
+			err := exec.Command(cmd, url).Run()
+			if err == nil {
+				return nil
+			}
+		}
+		return nil
+	}
+}
+
+// closeGitHubIssue closes an issue in GitHub using gh CLI
+func closeGitHubIssue(repo string, number int) error {
+	cmd := exec.Command("gh", "issue", "close", "--repo", repo, fmt.Sprintf("%d", number))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Try to provide a helpful error message
+		errStr := string(out)
+		if strings.Contains(errStr, "already closed") {
+			return fmt.Errorf("issue #%d is already closed", number)
+		}
+		return formatGHError(fmt.Errorf("%s: %s", err.Error(), errStr))
+	}
+	return nil
 }
