@@ -1441,8 +1441,41 @@ func (m *model) executeIssueTitleInput() {
 		return
 	}
 
-	// Execute tmux command to open new window with opencode-secure
-	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue")
+	// Get the selected repo
+	selectedRepo := m.newIssueFilteredRepos[m.newIssueSelectedRepo]
+
+	// Try to find a matching tmuxinator session
+	muxProject := findMatchingTmuxinatorSession(selectedRepo)
+	sessionName := muxProject
+	if sessionName == "" {
+		sessionName = strings.ReplaceAll(selectedRepo, "/", "-")
+	}
+
+	// Check if tmux session exists
+	checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
+	if err := checkCmd.Run(); err != nil {
+		// Session doesn't exist
+		if muxProject != "" {
+			// Use tmuxinator to start the project
+			startCmd := exec.Command("tmuxinator", "start", muxProject, "-d")
+			if err := startCmd.Run(); err != nil {
+				m.newIssueDialogMode = "error"
+				m.newIssueErrorMessage = "Failed to start tmuxinator project"
+				return
+			}
+		} else {
+			// Create new session manually
+			createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName, "-n", "main")
+			if err := createCmd.Run(); nil != err {
+				m.newIssueDialogMode = "error"
+				m.newIssueErrorMessage = "Failed to create tmux session"
+				return
+			}
+		}
+	}
+
+	// Execute tmux command to open new window in the repo's session
+	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue", "-t", sessionName)
 	if err := cmd.Run(); err != nil {
 		m.newIssueDialogMode = "error"
 		m.newIssueErrorMessage = "Failed to create tmux window"
@@ -1453,16 +1486,16 @@ func (m *model) executeIssueTitleInput() {
 	prompt := fmt.Sprintf("--model opencode/minimax-m2.5-free --prompt \"/issue %s\"", m.newIssueTitle)
 	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, prompt)
 
-	// Send the command to the new window
-	cmd = exec.Command("tmux", "send-keys", "-t", "opencode-issue", fullCommand, "Enter")
+	// Send the command to the new window in the repo's session
+	cmd = exec.Command("tmux", "send-keys", "-t", fmt.Sprintf("%s:opencode-issue", sessionName), fullCommand, "Enter")
 	if err := cmd.Run(); err != nil {
 		m.newIssueDialogMode = "error"
 		m.newIssueErrorMessage = "Failed to run opencode-secure"
 		return
 	}
 
-	// Switch to the new window
-	selectCmd := exec.Command("bash", "-c", "tmux select-window -t opencode-issue")
+	// Switch to the new window in the repo's session
+	selectCmd := exec.Command("bash", "-c", fmt.Sprintf("tmux select-window -t %s:opencode-issue && tmux switch-client -t %s", sessionName, sessionName))
 	_ = selectCmd.Run()
 
 	// Close the dialog
@@ -1470,6 +1503,58 @@ func (m *model) executeIssueTitleInput() {
 	m.newIssueDialogMode = ""
 	m.newIssueTitle = ""
 	m.newIssueFilterText = ""
+}
+
+func findMatchingTmuxinatorSession(repo string) string {
+	homeDir := os.Getenv("HOME")
+	configDir := homeDir + "/.config/tmuxinator"
+
+	cmd := exec.Command("bash", "-c", "tmuxinator list")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(string(out), "\n")[1:]
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		for _, projectName := range fields {
+			projectName = strings.TrimSpace(projectName)
+			if projectName == "" {
+				continue
+			}
+
+			configPath := configDir + "/" + projectName + ".yml"
+			data, err := os.ReadFile(configPath)
+			if err != nil {
+				continue
+			}
+
+			content := string(data)
+			for _, line := range strings.Split(content, "\n") {
+				if strings.HasPrefix(line, "root:") {
+					rootPath := strings.TrimSpace(strings.TrimPrefix(line, "root:"))
+					rootPath = os.ExpandEnv(rootPath)
+					rootPath = strings.TrimRight(rootPath, "/")
+
+					parts := strings.Split(rootPath, "/")
+					folderName := parts[len(parts)-1]
+
+					repoOwner, repoName, _ := strings.Cut(repo, "/")
+					searchName := repoName
+					if searchName == "" {
+						searchName = repoOwner
+					}
+
+					if strings.EqualFold(folderName, searchName) {
+						return projectName
+					}
+				}
+			}
+		}
+	}
+
+	return ""
 }
 
 func fetchUserRepos() ([]string, error) {

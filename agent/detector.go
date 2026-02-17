@@ -7,8 +7,10 @@ import (
 	"strings"
 )
 
-const agentName = "OpenCode"
-const agentPattern = "opencode"
+const (
+	agentName    = "OpenCode"
+	agentPattern = "opencode"
+)
 
 var ErrNoAgentsFound = errors.New("no agents found")
 
