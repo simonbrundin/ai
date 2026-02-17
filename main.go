@@ -171,6 +171,20 @@ type issue struct {
 	Repo   string
 }
 
+// groupIssuesByRepo groups issues by repository name (without owner prefix)
+func groupIssuesByRepo(issues []issue) map[string][]issue {
+	grouped := make(map[string][]issue)
+	for _, i := range issues {
+		repoName := i.Repo
+		// Extract just the repo name (after the /)
+		if idx := strings.Index(repoName, "/"); idx > 0 {
+			repoName = repoName[idx+1:]
+		}
+		grouped[repoName] = append(grouped[repoName], i)
+	}
+	return grouped
+}
+
 func main() {
 	p := tea.NewProgram(&model{repo: "simonbrundin/ai"})
 	if _, err := p.Run(); err != nil {
@@ -347,17 +361,24 @@ func (m *model) renderContent(width, height int) string {
 			s.WriteString(itemStyle.Render("  No issues found"))
 			s.WriteString("\n")
 		} else if len(m.issues) > 0 {
-			for _, i := range m.issues {
-				labels := ""
-				if len(i.Labels) > 0 {
-					labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
-				}
-				repoName := i.Repo
-				if idx := strings.Index(repoName, "/"); idx > 0 {
-					repoName = repoName[idx+1:]
-				}
-				s.WriteString(itemStyle.Render(fmt.Sprintf("  #%d %s%s (%s)", i.Number, truncate(i.Title, 30), labels, repoName)))
+			// Group issues by repository
+			grouped := groupIssuesByRepo(m.issues)
+
+			// Render each repo group with heading
+			for repoName, issues := range grouped {
+				// Render repo heading
+				s.WriteString(itemStyle.Render(fmt.Sprintf("  📁 %s", repoName)))
 				s.WriteString("\n")
+
+				// Render issues under this repo
+				for _, i := range issues {
+					labels := ""
+					if len(i.Labels) > 0 {
+						labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
+					}
+					s.WriteString(itemStyle.Render(fmt.Sprintf("    #%d %s%s", i.Number, truncate(i.Title, 30), labels)))
+					s.WriteString("\n")
+				}
 			}
 		}
 	}
@@ -456,7 +477,7 @@ func (m *model) refresh() tea.Msg {
 	}
 
 	if fetchErr != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", fetchErr)
+		return refreshComplete{agents: agents, issues: issues, err: fetchErr}
 	}
 
 	return refreshComplete{agents: agents, issues: issues, err: nil}
@@ -491,7 +512,7 @@ func fetchAllIssues() ([]issue, error) {
 	}
 
 	if len(failedRepos) > 0 {
-		fmt.Fprintf(os.Stderr, "Warning: failed to fetch from repos: %s\n", strings.Join(failedRepos, ", "))
+		return allIssues, fmt.Errorf("failed to fetch from repos: %s", strings.Join(failedRepos, ", "))
 	}
 
 	return allIssues, nil

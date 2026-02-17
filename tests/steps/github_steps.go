@@ -12,6 +12,7 @@ import (
 type GitHubState struct {
 	Issues         []Issue
 	FilteredIssues []Issue
+	GroupedIssues  map[string][]Issue
 	Err            error
 	Repo           string
 }
@@ -22,6 +23,7 @@ type Issue struct {
 	Title  string
 	State  string
 	Labels []Label
+	Repo   string
 }
 
 type Label struct {
@@ -173,6 +175,129 @@ func InitializeGitHubScenario(ctx *godog.ScenarioContext) {
 	ctx.Step(`^I should get a connection error$`, func() error {
 		if state.Err == nil {
 			return fmt.Errorf("expected connection error, got nil")
+		}
+		return nil
+	})
+
+	// Grouping steps
+	ctx.Step(`^I have issues from multiple repositories:$`, func(table *godog.Table) error {
+		state.Issues = []Issue{}
+		for i, row := range table.Rows {
+			if i == 0 { // Skip header
+				continue
+			}
+			issue := Issue{
+				Number: parseInt(row.Cells[0].Value),
+				Title:  row.Cells[1].Value,
+				Repo:   row.Cells[2].Value,
+				Labels: []Label{},
+			}
+			state.Issues = append(state.Issues, issue)
+		}
+		return nil
+	})
+
+	ctx.Step(`^I group issues by repository$`, func() error {
+		state.GroupedIssues = GroupIssuesByRepo(state.Issues)
+		return nil
+	})
+
+	ctx.Step(`^there should be (\d+) repositories displayed$`, func(count int) error {
+		if state.GroupedIssues == nil {
+			return fmt.Errorf("grouped issues is nil")
+		}
+		assert.Equal(nil, count, len(state.GroupedIssues), "number of repos should match")
+		return nil
+	})
+
+	ctx.Step(`^repo "([^"]*)" should have (\d+) issues$`, func(repo string, count int) error {
+		if state.GroupedIssues == nil {
+			return fmt.Errorf("grouped issues is nil")
+		}
+		issues, ok := state.GroupedIssues[repo]
+		if !ok {
+			return fmt.Errorf("repo '%s' not found in grouped issues", repo)
+		}
+		assert.Equal(nil, count, len(issues), "issue count for repo should match")
+		return nil
+	})
+
+	ctx.Step(`^I should see repository heading "([^"]*)"$`, func(heading string) error {
+		if state.GroupedIssues == nil {
+			return fmt.Errorf("grouped issues is nil")
+		}
+		_, ok := state.GroupedIssues[heading]
+		if !ok {
+			return fmt.Errorf("repository heading '%s' not found", heading)
+		}
+		return nil
+	})
+
+	ctx.Step(`^I have issues with labels:$`, func(table *godog.Table) error {
+		state.Issues = []Issue{}
+		for i, row := range table.Rows {
+			if i == 0 { // Skip header
+				continue
+			}
+			issue := Issue{
+				Number: parseInt(row.Cells[0].Value),
+				Title:  row.Cells[1].Value,
+				Repo:   row.Cells[2].Value,
+				Labels: []Label{},
+			}
+			// Handle labels column if present
+			if len(row.Cells) > 3 {
+				labelNames := strings.Split(row.Cells[3].Value, ",")
+				for _, name := range labelNames {
+					name = strings.TrimSpace(name)
+					if name != "" {
+						issue.Labels = append(issue.Labels, Label{Name: name})
+					}
+				}
+			}
+			state.Issues = append(state.Issues, issue)
+		}
+		return nil
+	})
+
+	ctx.Step(`^issue #(\d+) should have label "([^"]*)"$`, func(number int, label string) error {
+		// Use filtered or original issues
+		issues := state.FilteredIssues
+		if len(issues) == 0 {
+			issues = state.Issues
+		}
+		for _, issue := range issues {
+			if issue.Number == number {
+				for _, l := range issue.Labels {
+					if l.Name == label {
+						return nil
+					}
+				}
+				return fmt.Errorf("issue #%d does not have label '%s'", number, label)
+			}
+		}
+		return fmt.Errorf("issue #%d not found", number)
+	})
+
+	ctx.Step(`^I have issues from one repository:$`, func(table *godog.Table) error {
+		state.Issues = []Issue{}
+		for i, row := range table.Rows {
+			if i == 0 { // Skip header
+				continue
+			}
+			issue := Issue{
+				Number: parseInt(row.Cells[0].Value),
+				Title:  row.Cells[1].Value,
+				Labels: []Label{},
+			}
+			state.Issues = append(state.Issues, issue)
+		}
+		return nil
+	})
+
+	ctx.Step(`^they all belong to "([^"]*)"$`, func(repo string) error {
+		for i := range state.Issues {
+			state.Issues[i].Repo = repo
 		}
 		return nil
 	})

@@ -63,4 +63,20 @@ func TestGodog(t *testing.T) {
 			t.Errorf("godog tests failed with status: %d", status)
 		}
 	})
+
+	t.Run("reload_error_handling", func(t *testing.T) {
+		suite := godog.TestSuite{
+			Name:                 "reload error handling features",
+			TestSuiteInitializer: func(ctx *godog.TestSuiteContext) {},
+			ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+				steps.InitializeReloadErrorScenario(ctx)
+			},
+			Options: opts,
+		}
+
+		status := suite.Run()
+		if status != 0 {
+			t.Errorf("godog tests failed with status: %d", status)
+		}
+	})
 }
