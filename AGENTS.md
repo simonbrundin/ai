@@ -1,8 +1,10 @@
-# AGENTS.md - Agent Coding Guidelines for ai-tui
+# AGENTS.md - Agent Coding Guidelines for ai
 
 ## Overview
 
 This is a Go-based Terminal UI application that monitors OpenCode agents and GitHub issues. It uses Bubble Tea for the TUI framework and Godog for BDD testing.
+
+**Note:** The GitHub repository is named `ai` (not `ai-tui`). Owner: `simonbrundin`.
 
 ## Build, Lint & Test Commands
 
