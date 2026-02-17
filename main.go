@@ -13,25 +13,49 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const (
+	headerHeight = 2
+	footerHeight = 1
+	minWidth     = 80
+	minHeight    = 24
+)
+
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("205"))
 
+	headerBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1)
+
 	tabActiveStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("15")).
 			Background(lipgloss.Color("205")).
-			Padding(0, 1)
+			Padding(0, 2).
+			Bold(true)
 
 	tabInactiveStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("241"))
+				Foreground(lipgloss.Color("241")).
+				Padding(0, 2)
+
+	footerBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1)
+
+	keyHintStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205"))
 
 	sectionTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("212"))
+				Foreground(lipgloss.Color("212")).
+				Padding(1, 2, 0, 2)
 
 	itemStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
+			Foreground(lipgloss.Color("252")).
+			Padding(0, 2)
 
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("141"))
@@ -43,20 +67,32 @@ var (
 			Foreground(lipgloss.Color("196")).
 			Bold(true)
 
-	helpOverlayStyle = lipgloss.NewStyle().
-				Width(60).
-				Height(20).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("205")).
-				Foreground(lipgloss.Color("252")).
-				Background(lipgloss.Color("236"))
+	helpModalStyle = lipgloss.NewStyle().
+			Width(60).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("205")).
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("236")).
+			Padding(1)
+
+	helpTitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205")).
+			Bold(true).
+			Padding(0, 0, 1, 0)
 
 	helpItemStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
 
-	helpSelectedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("15")).
-				Background(lipgloss.Color("205"))
+	helpKeyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("205"))
+
+	boxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("205")).
+			Padding(1, 2)
+
+	mutedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
 )
 
 const (
@@ -78,6 +114,9 @@ type model struct {
 	showHelp    bool
 	helpSearch  string
 	helpMatches []string
+	width       int
+	height      int
+	ready       bool
 }
 
 const (
@@ -86,27 +125,41 @@ const (
 	numTabs = 2
 )
 
-var allCommands = []string{
-	"r: refresh   - Refresh data",
-	"q: quit      - Exit application",
-	"?: help      - Show this help menu",
-	"tab: next    - Go to next tab",
-	"shift+tab: prev - Go to previous tab",
-	"1-9: tab     - Jump to tab by number",
-	"escape: close - Close help overlay",
+var tabNames = []string{"Agents", "Issues"}
+
+var allCommands = []struct {
+	key   string
+	label string
+	desc  string
+}{
+	{"1-2", "tab", "Switch tabs"},
+	{"tab", "next", "Next tab"},
+	{"shift+tab", "prev", "Previous tab"},
+	{"r", "refresh", "Refresh data"},
+	{"q", "quit", "Exit application"},
+	{"?", "help", "Show help"},
+	{"esc", "close", "Close help"},
 }
 
 func (m *model) filterHelpCommands() {
 	if m.helpSearch == "" {
-		m.helpMatches = allCommands
+		m.helpMatches = nil
+		for _, cmd := range allCommands {
+			m.helpMatches = append(m.helpMatches, fmt.Sprintf("%-12s %s", cmd.key+":", cmd.desc))
+		}
 		return
 	}
 	searchLower := strings.ToLower(m.helpSearch)
 	m.helpMatches = nil
 	for _, cmd := range allCommands {
-		if strings.Contains(strings.ToLower(cmd), searchLower) {
-			m.helpMatches = append(m.helpMatches, cmd)
+		if strings.Contains(strings.ToLower(cmd.key), searchLower) ||
+			strings.Contains(strings.ToLower(cmd.label), searchLower) ||
+			strings.Contains(strings.ToLower(cmd.desc), searchLower) {
+			m.helpMatches = append(m.helpMatches, fmt.Sprintf("%-12s %s", cmd.key+":", cmd.desc))
 		}
+	}
+	if len(m.helpMatches) == 0 {
+		m.helpMatches = []string{"(no matches)"}
 	}
 }
 
@@ -141,6 +194,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case time.Time:
 		m.spinner = (m.spinner + 1) % len(spinners)
 		return m, tick()
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ready = true
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -151,7 +209,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "?":
 			m.showHelp = true
 			m.helpSearch = ""
-			m.helpMatches = allCommands
+			m.filterHelpCommands()
 			return m, nil
 		case "escape":
 			if m.showHelp {
@@ -199,33 +257,76 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) View() string {
-	s := titleStyle.Render("🤖 AI Monitor") + "\n"
-
-	tabNames := []string{"[Agents]", "[Issues]"}
-	for i, name := range tabNames {
-		if i == m.currentTab {
-			s += tabActiveStyle.Render(name) + " "
-		} else {
-			s += tabInactiveStyle.Render(name) + " "
-		}
+	if !m.ready {
+		return "Loading..."
 	}
-	s += "\n\n"
+
+	if m.width < minWidth || m.height < minHeight {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+			errorStyle.Render(fmt.Sprintf("Terminal too small (%dx%d)\nMinimum: %dx%d", m.width, m.height, minWidth, minHeight)))
+	}
+
+	var s strings.Builder
+
+	s.WriteString(m.renderHeader())
+	s.WriteString("\n")
+
+	contentHeight := m.height - headerHeight - footerHeight
+	s.WriteString(m.renderContent(m.width, contentHeight))
+	s.WriteString("\n")
+
+	s.WriteString(m.renderFooter())
 
 	if m.showHelp {
-		s += m.renderHelpOverlay()
-		return s
+		return m.renderHelpOverlay(s.String())
 	}
 
+	return s.String()
+}
+
+func (m *model) renderHeader() string {
+	title := titleStyle.Render(" AI Monitor")
+
+	var tabs []string
+	for i, name := range tabNames {
+		isActive := i == m.currentTab
+		tabStr := name
+		if isActive {
+			tabStr = tabActiveStyle.Render(" " + name + " ")
+		} else {
+			tabStr = tabInactiveStyle.Render(" " + name + " ")
+		}
+		tabs = append(tabs, tabStr)
+	}
+	tabBar := strings.Join(tabs, " ")
+
+	titleWidth := lipgloss.Width(title)
+	tabWidth := lipgloss.Width(tabBar)
+	spacing := m.width - titleWidth - tabWidth - 1
+	if spacing < 1 {
+		spacing = 1
+	}
+
+	header := title + strings.Repeat(" ", spacing/2) + tabBar
+	return headerBarStyle.Width(m.width).Render(header)
+}
+
+func (m *model) renderContent(width, height int) string {
 	if m.loading {
 		spinner := spinners[m.spinner]
-		s += statusStyle.Render(spinner + " Loading...")
-		return s
+		msg := spinner + " Loading..."
+		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+			statusStyle.Render(msg))
 	}
 
+	var s strings.Builder
+
 	if m.currentTab == tabAgents {
-		s += sectionTitleStyle.Render("🤖 Running Agents") + "\n"
+		s.WriteString(sectionTitleStyle.Render("🤖 Running Agents"))
+		s.WriteString("\n")
 		if len(m.agents) == 0 && m.err == nil {
-			s += itemStyle.Render("  No agents running") + "\n"
+			s.WriteString(itemStyle.Render("  No agents running"))
+			s.WriteString("\n")
 		} else if len(m.agents) > 0 {
 			seen := make(map[string]bool)
 			for _, a := range m.agents {
@@ -235,13 +336,16 @@ func (m *model) View() string {
 				}
 				seen[key] = true
 				repoName := getRepoName(a.WorkingDir)
-				s += itemStyle.Render(fmt.Sprintf("  • OpenCode @ %s", repoName)) + "\n"
+				s.WriteString(itemStyle.Render(fmt.Sprintf("  • OpenCode @ %s", repoName)))
+				s.WriteString("\n")
 			}
 		}
 	} else {
-		s += sectionTitleStyle.Render("📋 GitHub Issues (alla repos)") + "\n"
+		s.WriteString(sectionTitleStyle.Render("📋 GitHub Issues"))
+		s.WriteString("\n")
 		if len(m.issues) == 0 && m.err == nil {
-			s += itemStyle.Render("  No issues found") + "\n"
+			s.WriteString(itemStyle.Render("  No issues found"))
+			s.WriteString("\n")
 		} else if len(m.issues) > 0 {
 			for _, i := range m.issues {
 				labels := ""
@@ -252,28 +356,71 @@ func (m *model) View() string {
 				if idx := strings.Index(repoName, "/"); idx > 0 {
 					repoName = repoName[idx+1:]
 				}
-				s += itemStyle.Render(fmt.Sprintf("  #%d %s%s (%s)", i.Number, truncate(i.Title, 30), labels, repoName)) + "\n"
+				s.WriteString(itemStyle.Render(fmt.Sprintf("  #%d %s%s (%s)", i.Number, truncate(i.Title, 30), labels, repoName)))
+				s.WriteString("\n")
 			}
 		}
 	}
 
 	if m.err != nil {
-		s += "\n" + errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n"
+		s.WriteString("\n")
+		s.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		s.WriteString("\n")
 	}
 
-	s += "\n" + statusStyle.Render("r: refresh | q: quit | ?: help")
-	return s
+	content := s.String()
+	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
 }
 
-func (m *model) renderHelpOverlay() string {
-	helpContent := "Search: " + m.helpSearch + "\n\n"
+func (m *model) renderFooter() string {
+	hints := []string{
+		"1-2: tab",
+		"r: refresh",
+		"q: quit",
+		"?: help",
+	}
+
+	hintStr := hints[0]
+	for i := 1; i < len(hints); i++ {
+		hintStr += "  " + hints[i]
+	}
+
+	footer := keyHintStyle.Render(hintStr)
+	return footerBarStyle.Width(m.width).Render(footer)
+}
+
+func (m *model) renderHelpOverlay(content string) string {
+	var s strings.Builder
+
+	s.WriteString(helpTitleStyle.Render("Keyboard Shortcuts"))
+	s.WriteString("\n")
+
+	if m.helpSearch != "" {
+		s.WriteString(mutedStyle.Render("Search: "))
+		s.WriteString(helpKeyStyle.Render(m.helpSearch))
+		s.WriteString("\n\n")
+	}
+
 	for _, cmd := range m.helpMatches {
-		helpContent += "  " + cmd + "\n"
+		s.WriteString(helpItemStyle.Render("  " + cmd))
+		s.WriteString("\n")
 	}
-	if len(m.helpMatches) == 0 {
-		helpContent += "  (no matches)\n"
+
+	s.WriteString("\n")
+	s.WriteString(mutedStyle.Render("  esc: close"))
+
+	helpContent := helpModalStyle.Render(s.String())
+
+	helpWidth := 50
+	helpHeight := len(m.helpMatches) + 8
+	if helpWidth > m.width-4 {
+		helpWidth = m.width - 4
 	}
-	return helpOverlayStyle.Render(helpContent)
+	if helpHeight > m.height-4 {
+		helpHeight = m.height - 4
+	}
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpContent)
 }
 
 func truncate(s string, maxLen int) string {
