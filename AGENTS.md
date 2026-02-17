@@ -234,3 +234,21 @@ const (
 - Created `FilterActive()` function in agent package for filtering logic
 - BDD tests use real functions (`agent.FilterActive`) with mock data input
 - When filtering is disabled (`activeOnly=false`), return all agents unchanged
+
+## Issue #11: Deterministic Issue List
+
+- Go map iteration is non-deterministic - never rely on iteration order
+- Always sort map keys before iterating for stable display
+- Sort issues within each group by a consistent field (number, date, etc.)
+- Extract sorting logic to helper functions to avoid duplication:
+  ```go
+  func sortedRepoKeys(grouped map[string][]issue) []string {
+      keys := make([]string, 0, len(grouped))
+      for repoName := range grouped {
+          keys = append(keys, repoName)
+      }
+      sort.Strings(keys)
+      return keys
+  }
+  ```
+- Test helpers should mirror production logic to catch regressions

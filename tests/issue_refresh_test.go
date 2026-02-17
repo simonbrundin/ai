@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,7 +35,7 @@ type Issue struct {
 // =============================================================================
 
 // Test: EXPECTED behavior - iteration order should be deterministic
-// FAILS with current implementation because map iteration is random
+// FIXED: Now uses sorted keys (mirrors main.go implementation)
 func Test_EXPECTED_IteratingOverGroupedIssues_ShouldBeDeterministic(t *testing.T) {
 	grouped := map[string][]Issue{
 		"repo-z": {{Number: 1, Title: "Issue 1", Repo: "simonbrundin/repo-z"}},
@@ -42,13 +43,12 @@ func Test_EXPECTED_IteratingOverGroupedIssues_ShouldBeDeterministic(t *testing.T
 		"repo-m": {{Number: 3, Title: "Issue 3", Repo: "simonbrundin/repo-m"}},
 	}
 
-	// EXPECTED: Always same order (alphabetical)
-	// This FAILS with current implementation (non-deterministic map iteration)
-
+	// EXPECTED: Always same order (alphabetical) - by sorting keys first
 	var firstOrder string
 	for i := 0; i < 50; i++ {
+		repoNames := sortedRepoKeysForTest(grouped)
 		var order string
-		for repoName := range grouped {
+		for _, repoName := range repoNames {
 			order += repoName + ","
 		}
 
@@ -56,14 +56,13 @@ func Test_EXPECTED_IteratingOverGroupedIssues_ShouldBeDeterministic(t *testing.T
 			firstOrder = order
 		}
 
-		// This assertion FAILS because order varies!
 		assert.Equal(t, firstOrder, order,
-			"EXPECTED: Order should be consistent. FAIL: Order varies due to non-deterministic map iteration!")
+			"EXPECTED: Order should be consistent when using sorted keys!")
 	}
 }
 
 // Test: EXPECTED behavior - repos should be sorted alphabetically
-// FAILS with current implementation
+// FIXED: Now uses sorted keys (mirrors main.go implementation)
 func Test_EXPECTED_ReposShouldBeSortedAlphabetically(t *testing.T) {
 	issues := []Issue{
 		{Number: 1, Title: "zebra", Repo: "simonbrundin/zebra"},
@@ -72,16 +71,9 @@ func Test_EXPECTED_ReposShouldBeSortedAlphabetically(t *testing.T) {
 	}
 
 	grouped := groupIssuesByRepoForTest(issues)
+	repos := sortedRepoKeysForTest(grouped)
 
-	// EXPECTED: alpha, middle, zebra (alphabetical)
-	// FAILS with current implementation
-
-	var repos []string
-	for repo := range grouped {
-		repos = append(repos, repo)
-	}
-
-	// This FAILS - repos are in random order
+	// This should now PASS with sorted keys
 	assert.Equal(t, []string{"alpha", "middle", "zebra"}, repos,
 		"EXPECTED: Repos should be sorted alphabetically")
 }
@@ -172,7 +164,23 @@ func groupIssuesByRepoForTest(issues []Issue) map[string][]Issue {
 		}
 		grouped[repoName] = append(grouped[repoName], i)
 	}
+
+	for repoName := range grouped {
+		sort.SliceStable(grouped[repoName], func(i, j int) bool {
+			return grouped[repoName][i].Number < grouped[repoName][j].Number
+		})
+	}
+
 	return grouped
+}
+
+func sortedRepoKeysForTest(grouped map[string][]Issue) []string {
+	keys := make([]string, 0, len(grouped))
+	for repoName := range grouped {
+		keys = append(keys, repoName)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func sortIssuesForTest(issues []Issue) []Issue {

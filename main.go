@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -172,17 +173,34 @@ type issue struct {
 }
 
 // groupIssuesByRepo groups issues by repository name (without owner prefix)
+// Issues are sorted by repo name, then by issue number for deterministic display
 func groupIssuesByRepo(issues []issue) map[string][]issue {
 	grouped := make(map[string][]issue)
 	for _, i := range issues {
 		repoName := i.Repo
-		// Extract just the repo name (after the /)
 		if idx := strings.Index(repoName, "/"); idx > 0 {
 			repoName = repoName[idx+1:]
 		}
 		grouped[repoName] = append(grouped[repoName], i)
 	}
+
+	for repoName := range grouped {
+		sort.SliceStable(grouped[repoName], func(i, j int) bool {
+			return grouped[repoName][i].Number < grouped[repoName][j].Number
+		})
+	}
+
 	return grouped
+}
+
+// sortedRepoKeys extracts and sorts repo names from a grouped map
+func sortedRepoKeys(grouped map[string][]issue) []string {
+	keys := make([]string, 0, len(grouped))
+	for repoName := range grouped {
+		keys = append(keys, repoName)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func main() {
@@ -363,9 +381,11 @@ func (m *model) renderContent(width, height int) string {
 		} else if len(m.issues) > 0 {
 			// Group issues by repository
 			grouped := groupIssuesByRepo(m.issues)
+			repoNames := sortedRepoKeys(grouped)
 
 			// Render each repo group with heading
-			for repoName, issues := range grouped {
+			for _, repoName := range repoNames {
+				issues := grouped[repoName]
 				// Render repo heading
 				s.WriteString(itemStyle.Render(fmt.Sprintf("  📁 %s", repoName)))
 				s.WriteString("\n")
