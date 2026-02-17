@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"ai-tui/agent"
-	"github.com/charmbracelet/bubbletea"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -41,11 +42,13 @@ const (
 	newIssueDialogWidth  = 50
 	newIssueDialogHeight = 15
 	opencodeSecurePath   = "/home/simon/repos/dotfiles/opencode/.config/opencode/opencode-secure"
-	opencodeIssuePrompt  = "--prompt \"/issue\""
+	opencodeIssuePrompt  = "--model opencode/minimax-m2.5-free --prompt \"/issue\""
 )
 
-var commandNames = []string{"Skriv tester", "Implementera", "Refactor", "Dokumentera", "Skapa PR"}
-var commandAliases = []string{"/tdd", "/implement", "/refactor", "/docs", "/pr"}
+var (
+	commandNames   = []string{"Skriv tester", "Implementera", "Refactor", "Dokumentera", "Skapa PR"}
+	commandAliases = []string{"/tdd", "/implement", "/refactor", "/docs", "/pr"}
+)
 
 var (
 	titleStyle = lipgloss.NewStyle().
@@ -341,7 +344,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpSearch = ""
 			m.filterHelpCommands()
 			return m, nil
-		case "escape":
+		case "escape", "esc":
 			if m.showHelp {
 				m.showHelp = false
 				m.helpSearch = ""
@@ -352,6 +355,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.showCommandDialog {
 				m.showCommandDialog = false
 				m.selectedCommand = -1
+			}
+			if m.showNewIssueDialog {
+				m.showNewIssueDialog = false
+				m.newIssueDialogMode = ""
+				m.newIssueFilterText = ""
+				m.newIssueSelectedRepo = 0
 			}
 			return m, nil
 		case "tab":
@@ -436,6 +445,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		// Handle Enter key for new issue dialog BEFORE the single-char check
+		// This fixes the bug where Enter was never handled because "enter" has len=5
+		if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && (msg.String() == "enter" || msg.String() == "return") {
+			m.executeNewIssueSelection()
+			return m, nil
+		}
 		if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && len(msg.String()) == 1 {
 			key := msg.String()
 			if key >= "1" && key <= "9" {
@@ -445,10 +460,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.executeNewIssueSelection()
 					return m, nil
 				}
-			}
-			if key == "enter" || key == "return" {
-				m.executeNewIssueSelection()
-				return m, nil
 			}
 			m.newIssueFilterText += key
 			m.filterNewIssueRepos()
