@@ -267,3 +267,21 @@ const (
   }
   ```
 - Test helpers should mirror production logic to catch regressions
+
+## Issue #19: Dynamic Title Truncation
+
+- TUI components should adapt to terminal dimensions (`m.width`, `m.height`)
+- Extract magic numbers to named constants for rendering calculations:
+  ```go
+  const (
+      issuePrefixWidth   = 10
+      issuePadding       = 2
+      issueMinTitleWidth = 10
+  )
+  ```
+- Separate calculation logic from rendering:
+  ```go
+  func calculateLabelsWidth(labels []string) int
+  func calculateMaxTitleWidth(terminalWidth, labelsWidth int) int
+  ```
+- Minimum bounds ensure usability on narrow terminals
