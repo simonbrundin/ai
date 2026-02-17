@@ -32,9 +32,16 @@ const (
 )
 
 const (
-	commandDialogWidth  = 40
-	commandDialogHeight = 14
-	defaultWorkingDir   = "/home/simon/repos/ai"
+	commandDialogWidth    = 40
+	commandDialogHeight   = 14
+	commandPromptTemplate = "/%s %%d"
+)
+
+const (
+	newIssueDialogWidth  = 50
+	newIssueDialogHeight = 15
+	opencodeSecurePath   = "/home/simon/repos/dotfiles/opencode/.config/opencode/opencode-secure"
+	opencodeIssuePrompt  = "--prompt \"/issue\""
 )
 
 var commandNames = []string{"Skriv tester", "Implementera", "Refactor", "Dokumentera", "Skapa PR"}
@@ -194,6 +201,14 @@ type model struct {
 	showConfirmDialog bool
 	showCommandDialog bool
 	selectedCommand   int
+	// New Issue Dialog (Issue #27)
+	showNewIssueDialog    bool
+	newIssueRepos         []string
+	newIssueFilteredRepos []string
+	newIssueSelectedRepo  int
+	newIssueDialogMode    string
+	newIssueErrorMessage  string
+	newIssueFilterText    string
 }
 
 const (
@@ -374,16 +389,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedCommand = -1
 				return m, nil
 			}
+			if m.showNewIssueDialog {
+				m.showNewIssueDialog = false
+				m.newIssueFilterText = ""
+				return m, nil
+			}
+			if m.currentTab == tabIssues {
+				m.openNewIssueDialog()
+			}
 			m.showConfirmDialog = false
 			return m, nil
 		case "up":
 			if m.showCommandDialog && m.selectedCommand > 0 {
 				m.selectedCommand--
 			}
+			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && m.newIssueSelectedRepo > 0 {
+				m.newIssueSelectedRepo--
+			}
 			return m, nil
 		case "down":
 			if m.showCommandDialog && m.selectedCommand < len(commandNames)-1 {
 				m.selectedCommand++
+			}
+			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && m.newIssueSelectedRepo < len(m.newIssueFilteredRepos)-1 {
+				m.newIssueSelectedRepo++
 			}
 			return m, nil
 		}
@@ -406,6 +435,31 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.executeSelectedCommand()
 				return m, nil
 			}
+		}
+		if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && len(msg.String()) == 1 {
+			key := msg.String()
+			if key >= "1" && key <= "9" {
+				repoNum := int(key[0] - '1')
+				if repoNum < len(m.newIssueFilteredRepos) {
+					m.newIssueSelectedRepo = repoNum
+					m.executeNewIssueSelection()
+					return m, nil
+				}
+			}
+			if key == "enter" || key == "return" {
+				m.executeNewIssueSelection()
+				return m, nil
+			}
+			m.newIssueFilterText += key
+			m.filterNewIssueRepos()
+			return m, nil
+		}
+		if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" && msg.String() == "backspace" {
+			if len(m.newIssueFilterText) > 0 {
+				m.newIssueFilterText = m.newIssueFilterText[:len(m.newIssueFilterText)-1]
+				m.filterNewIssueRepos()
+			}
+			return m, nil
 		}
 		if len(msg.String()) == 1 {
 			key := msg.String()
@@ -485,7 +539,7 @@ func (m *model) executeSelectedCommand() {
 	issueNum := issue.Number
 
 	cmd := exec.Command("tmux", "new-window", "-a", "-t", "0", "-n", fmt.Sprintf("opencode %s %d", command, issueNum),
-		"bash", "-c", fmt.Sprintf("cd %s && echo 'Running: %s %d' && sleep 1", defaultWorkingDir, command, issueNum))
+		"bash", "-c", fmt.Sprintf("opencode --prompt '%s %d'; echo; echo 'Press Enter to close...'; read", command, issueNum))
 
 	err := cmd.Run()
 	if err != nil {
@@ -584,6 +638,13 @@ func (m *model) renderContent(width, height int) string {
 		s.WriteString("\n")
 		s.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
 		s.WriteString("\n")
+	}
+
+	// Render New Issue Dialog on top of content
+	if m.showNewIssueDialog {
+		dialog := m.renderNewIssueDialog(width, height)
+		s.WriteString("\n")
+		s.WriteString(dialog)
 	}
 
 	content := s.String()
@@ -687,6 +748,7 @@ func (m *model) renderFooter() string {
 		hints = append(hints, "j/k: nav")
 		hints = append(hints, "o: open")
 		hints = append(hints, "d: done")
+		hints = append(hints, "n: new")
 	}
 
 	hintStr := hints[0]
@@ -857,15 +919,18 @@ func (m *model) refresh() tea.Msg {
 }
 
 func fetchAllIssues() ([]issue, error) {
-	out, err := runGHCommand("search", "issues", "--owner", "simonbrundin", "--state", "open", "--limit", fmt.Sprintf("%d", searchLimit), "--json", "number,title,state,repository")
+	out, err := runGHCommand("search", "issues", "--owner", "simonbrundin", "--state", "open", "--limit", fmt.Sprintf("%d", searchLimit), "--json", "number,title,state,repository,labels")
 	if err != nil {
 		return nil, formatGHError(err)
 	}
 
 	var searchResults []struct {
-		Number     int    `json:"number"`
-		Title      string `json:"title"`
-		State      string `json:"state"`
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		State  string `json:"state"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 		Repository struct {
 			FullName string `json:"nameWithOwner"`
 		} `json:"repository"`
@@ -876,10 +941,15 @@ func fetchAllIssues() ([]issue, error) {
 
 	var allIssues []issue
 	for _, result := range searchResults {
+		labelNames := make([]string, len(result.Labels))
+		for i, label := range result.Labels {
+			labelNames[i] = label.Name
+		}
 		allIssues = append(allIssues, issue{
 			Number: result.Number,
 			Title:  result.Title,
 			State:  result.State,
+			Labels: labelNames,
 			Repo:   result.Repository.FullName,
 		})
 	}
@@ -981,4 +1051,176 @@ func closeGitHubIssue(repo string, number int) error {
 		return formatGHError(fmt.Errorf("%s: %s", err.Error(), errStr))
 	}
 	return nil
+}
+
+// =============================================================================
+// New Issue Dialog (Issue #27)
+// =============================================================================
+
+func (m *model) openNewIssueDialog() {
+	m.showNewIssueDialog = true
+	m.newIssueDialogMode = "repo-select"
+	m.newIssueSelectedRepo = 0
+	m.newIssueFilterText = ""
+	m.newIssueErrorMessage = ""
+
+	// Fetch user's repos
+	repos, err := fetchUserRepos()
+	if err != nil {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = err.Error()
+		return
+	}
+
+	m.newIssueRepos = repos
+	m.newIssueFilteredRepos = repos
+}
+
+func (m *model) filterNewIssueRepos() {
+	if m.newIssueFilterText == "" {
+		m.newIssueFilteredRepos = m.newIssueRepos
+		if m.newIssueSelectedRepo >= len(m.newIssueFilteredRepos) {
+			m.newIssueSelectedRepo = 0
+		}
+		return
+	}
+
+	query := strings.ToLower(m.newIssueFilterText)
+	m.newIssueFilteredRepos = nil
+	for _, repo := range m.newIssueRepos {
+		if fuzzyMatchRepo(repo, query) {
+			m.newIssueFilteredRepos = append(m.newIssueFilteredRepos, repo)
+		}
+	}
+
+	if m.newIssueSelectedRepo >= len(m.newIssueFilteredRepos) {
+		m.newIssueSelectedRepo = 0
+	}
+}
+
+func fuzzyMatchRepo(text, query string) bool {
+	textLower := strings.ToLower(text)
+	queryIdx := 0
+	for _, c := range textLower {
+		if queryIdx < len(query) && string(c) == string(query[queryIdx]) {
+			queryIdx++
+		}
+	}
+	return queryIdx == len(query)
+}
+
+func (m *model) executeNewIssueSelection() {
+	if len(m.newIssueFilteredRepos) == 0 {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "No repository selected"
+		return
+	}
+
+	// Execute tmux command to open new window with opencode-secure
+	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue")
+	if err := cmd.Run(); err != nil {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "Failed to create tmux window"
+		return
+	}
+
+	// Send the command to the new window
+	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, opencodeIssuePrompt)
+	cmd = exec.Command("tmux", "send-keys", "-t", "opencode-issue", fullCommand, "Enter")
+	if err := cmd.Run(); err != nil {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "Failed to run opencode-secure"
+		return
+	}
+
+	// Close the dialog
+	m.showNewIssueDialog = false
+	m.newIssueFilterText = ""
+}
+
+func fetchUserRepos() ([]string, error) {
+	cmd := exec.Command("gh", "repo", "list", "--limit", "100", "--json", "nameWithOwner")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, formatGHError(fmt.Errorf("failed to list repos: %w", err))
+	}
+
+	// gh repo list --json returns an array of objects
+	type repoResult []struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	}
+
+	var repoData repoResult
+	if err := json.Unmarshal(out, &repoData); err != nil {
+		return nil, fmt.Errorf("failed to parse repos: %w", err)
+	}
+
+	repos := make([]string, len(repoData))
+	for i, r := range repoData {
+		repos[i] = r.NameWithOwner
+	}
+
+	return repos, nil
+}
+
+func (m *model) renderNewIssueDialog(width, height int) string {
+	dialogWidth := newIssueDialogWidth
+	dialogHeight := newIssueDialogHeight
+
+	if dialogWidth > width-4 {
+		dialogWidth = width - 4
+	}
+	if dialogHeight > height-4 {
+		dialogHeight = height - 4
+	}
+
+	var content string
+
+	if m.newIssueDialogMode == "error" {
+		content = errorStyle.Render("Error: "+m.newIssueErrorMessage) + "\n\n" +
+			mutedStyle.Render("Press any key to close...")
+	} else {
+		// Repo selection mode
+		content = titleStyle.Render("Create New Issue") + "\n\n" +
+			mutedStyle.Render("Select repository:") + "\n\n"
+
+		// Show filter text
+		if m.newIssueFilterText != "" {
+			content += mutedStyle.Render("Filter: ") + m.newIssueFilterText + "\n\n"
+		}
+
+		// Show repos
+		maxVisible := dialogHeight - 10
+		if len(m.newIssueFilteredRepos) > maxVisible {
+			m.newIssueFilteredRepos = m.newIssueFilteredRepos[:maxVisible]
+		}
+
+		for i, repo := range m.newIssueFilteredRepos {
+			prefix := "   "
+			style := mutedStyle
+			if i == m.newIssueSelectedRepo {
+				prefix = " > "
+				style = selectedItemStyle
+			}
+			content += style.Render(fmt.Sprintf("%s%s", prefix, repo)) + "\n"
+		}
+
+		if len(m.newIssueFilteredRepos) == 0 {
+			content += mutedStyle.Render("No repositories found") + "\n"
+		}
+
+		content += "\n" + mutedStyle.Render("↑/↓: navigate  1-9: select  Enter: confirm  n/Esc: close")
+	}
+
+	dialog := lipgloss.NewStyle().
+		Width(dialogWidth).
+		Height(dialogHeight).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("205")).
+		Background(lipgloss.Color("236")).
+		Foreground(lipgloss.Color("252")).
+		Padding(1)
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
+		dialog.Render(content))
 }

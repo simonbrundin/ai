@@ -331,3 +331,26 @@ const (
   var browserCommands = []string{"xdg-open", "gnome-open", "firefox", "chromium-browser", "google-chrome"}
   ```
 - Try each command until one succeeds, ignore errors if all fail
+
+## Issue #28: Process Step Labels
+
+For tracking which phase of the workflow an issue is in, use these labels:
+
+| Label | Description | Usage |
+|-------|-------------|-------|
+| `tester` | Issue is in test phase | `gh issue edit <num> --add-label tester` |
+| `implementation` | Issue is in implementation phase | `gh issue edit <num> --add-label implementation` |
+| `refactor` | Issue is in refactor phase | `gh issue edit <num> --add-label refactor` |
+| `docs` | Issue is in documentation phase | `gh issue edit <num> --add-label docs` |
+| `user_test` | Issue is in user test phase | `gh issue edit <num> --add-label user_test` |
+| `pr` | Issue is in PR phase | `gh issue edit <num> --add-label pr` |
+
+**Workflow:**
+1. Start with `tester` when writing tests
+2. Change to `implementation` when implementing code
+3. Change to `refactor` when refactoring
+4. Change to `docs` when documenting
+5. Change to `user_test` during user testing
+6. Change to `pr` when creating pull request
+
+Multiple labels can coexist (e.g., `implementation` + `docs` for ongoing work).
