@@ -18,6 +18,14 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("205"))
 
+	tabActiveStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("205")).
+			Padding(0, 1)
+
+	tabInactiveStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241"))
+
 	sectionTitleStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("212"))
@@ -34,6 +42,21 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
 			Bold(true)
+
+	helpOverlayStyle = lipgloss.NewStyle().
+				Width(60).
+				Height(20).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("205")).
+				Foreground(lipgloss.Color("252")).
+				Background(lipgloss.Color("236"))
+
+	helpItemStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
+
+	helpSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("15")).
+				Background(lipgloss.Color("205"))
 )
 
 const (
@@ -45,12 +68,46 @@ const (
 var spinners = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type model struct {
-	agents  []agent.Agent
-	issues  []issue
-	loading bool
-	err     error
-	repo    string
-	spinner int
+	agents      []agent.Agent
+	issues      []issue
+	loading     bool
+	err         error
+	repo        string
+	spinner     int
+	currentTab  int
+	showHelp    bool
+	helpSearch  string
+	helpMatches []string
+}
+
+const (
+	tabAgents = iota
+	tabIssues
+	numTabs = 2
+)
+
+var allCommands = []string{
+	"r: refresh   - Refresh data",
+	"q: quit      - Exit application",
+	"?: help      - Show this help menu",
+	"tab: next    - Go to next tab",
+	"shift+tab: prev - Go to previous tab",
+	"1-9: tab     - Jump to tab by number",
+	"escape: close - Close help overlay",
+}
+
+func (m *model) filterHelpCommands() {
+	if m.helpSearch == "" {
+		m.helpMatches = allCommands
+		return
+	}
+	searchLower := strings.ToLower(m.helpSearch)
+	m.helpMatches = nil
+	for _, cmd := range allCommands {
+		if strings.Contains(strings.ToLower(cmd), searchLower) {
+			m.helpMatches = append(m.helpMatches, cmd)
+		}
+	}
 }
 
 type issue struct {
@@ -91,6 +148,44 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.loading = true
 			return m, m.refresh
+		case "?":
+			m.showHelp = true
+			m.helpSearch = ""
+			m.helpMatches = allCommands
+			return m, nil
+		case "escape":
+			if m.showHelp {
+				m.showHelp = false
+				m.helpSearch = ""
+			}
+			return m, nil
+		case "tab":
+			m.currentTab = (m.currentTab + 1) % numTabs
+			return m, nil
+		case "shift+tab":
+			m.currentTab = (m.currentTab - 1 + numTabs) % numTabs
+			return m, nil
+		}
+		if m.showHelp {
+			if msg.String() == "backspace" {
+				if len(m.helpSearch) > 0 {
+					m.helpSearch = m.helpSearch[:len(m.helpSearch)-1]
+					m.filterHelpCommands()
+				}
+			} else if len(msg.String()) == 1 {
+				m.helpSearch += msg.String()
+				m.filterHelpCommands()
+			}
+			return m, nil
+		}
+		if len(msg.String()) == 1 {
+			key := msg.String()
+			if key >= "1" && key <= "9" {
+				tabNum := int(key[0] - '0')
+				if tabNum >= 1 && tabNum <= numTabs {
+					m.currentTab = tabNum - 1
+				}
+			}
 		}
 	case refreshComplete:
 		m.loading = false
@@ -104,7 +199,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) View() string {
-	s := titleStyle.Render("🤖 AI Monitor") + "\n\n"
+	s := titleStyle.Render("🤖 AI Monitor") + "\n"
+
+	tabNames := []string{"[Agents]", "[Issues]"}
+	for i, name := range tabNames {
+		if i == m.currentTab {
+			s += tabActiveStyle.Render(name) + " "
+		} else {
+			s += tabInactiveStyle.Render(name) + " "
+		}
+	}
+	s += "\n\n"
+
+	if m.showHelp {
+		s += m.renderHelpOverlay()
+		return s
+	}
 
 	if m.loading {
 		spinner := spinners[m.spinner]
@@ -112,36 +222,38 @@ func (m *model) View() string {
 		return s
 	}
 
-	s += sectionTitleStyle.Render("🤖 Running Agents") + "\n"
-	if len(m.agents) == 0 && m.err == nil {
-		s += itemStyle.Render("  No agents running") + "\n"
-	} else if len(m.agents) > 0 {
-		seen := make(map[string]bool)
-		for _, a := range m.agents {
-			key := a.Name + ":" + a.WorkingDir
-			if seen[key] {
-				continue
+	if m.currentTab == tabAgents {
+		s += sectionTitleStyle.Render("🤖 Running Agents") + "\n"
+		if len(m.agents) == 0 && m.err == nil {
+			s += itemStyle.Render("  No agents running") + "\n"
+		} else if len(m.agents) > 0 {
+			seen := make(map[string]bool)
+			for _, a := range m.agents {
+				key := a.Name + ":" + a.WorkingDir
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				repoName := getRepoName(a.WorkingDir)
+				s += itemStyle.Render(fmt.Sprintf("  • OpenCode @ %s", repoName)) + "\n"
 			}
-			seen[key] = true
-			repoName := getRepoName(a.WorkingDir)
-			s += itemStyle.Render(fmt.Sprintf("  • OpenCode @ %s", repoName)) + "\n"
 		}
-	}
-
-	s += "\n" + sectionTitleStyle.Render("📋 GitHub Issues (alla repos)") + "\n"
-	if len(m.issues) == 0 && m.err == nil {
-		s += itemStyle.Render("  No issues found") + "\n"
-	} else if len(m.issues) > 0 {
-		for _, i := range m.issues {
-			labels := ""
-			if len(i.Labels) > 0 {
-				labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
+	} else {
+		s += sectionTitleStyle.Render("📋 GitHub Issues (alla repos)") + "\n"
+		if len(m.issues) == 0 && m.err == nil {
+			s += itemStyle.Render("  No issues found") + "\n"
+		} else if len(m.issues) > 0 {
+			for _, i := range m.issues {
+				labels := ""
+				if len(i.Labels) > 0 {
+					labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
+				}
+				repoName := i.Repo
+				if idx := strings.Index(repoName, "/"); idx > 0 {
+					repoName = repoName[idx+1:]
+				}
+				s += itemStyle.Render(fmt.Sprintf("  #%d %s%s (%s)", i.Number, truncate(i.Title, 30), labels, repoName)) + "\n"
 			}
-			repoName := i.Repo
-			if idx := strings.Index(repoName, "/"); idx > 0 {
-				repoName = repoName[idx+1:]
-			}
-			s += itemStyle.Render(fmt.Sprintf("  #%d %s%s (%s)", i.Number, truncate(i.Title, 30), labels, repoName)) + "\n"
 		}
 	}
 
@@ -149,8 +261,19 @@ func (m *model) View() string {
 		s += "\n" + errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n"
 	}
 
-	s += "\n" + statusStyle.Render("r: refresh | q: quit")
+	s += "\n" + statusStyle.Render("r: refresh | q: quit | ?: help")
 	return s
+}
+
+func (m *model) renderHelpOverlay() string {
+	helpContent := "Search: " + m.helpSearch + "\n\n"
+	for _, cmd := range m.helpMatches {
+		helpContent += "  " + cmd + "\n"
+	}
+	if len(m.helpMatches) == 0 {
+		helpContent += "  (no matches)\n"
+	}
+	return helpOverlayStyle.Render(helpContent)
 }
 
 func truncate(s string, maxLen int) string {
