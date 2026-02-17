@@ -22,7 +22,10 @@ const (
 )
 
 const (
-	searchLimit = 100
+	searchLimit        = 100
+	issuePrefixWidth   = 10
+	issuePadding       = 2
+	issueMinTitleWidth = 10
 )
 
 var (
@@ -430,11 +433,13 @@ func (m *model) renderIssuesView() string {
 			s.WriteString("\n")
 
 			for _, i := range issues {
+				labelsWidth := calculateLabelsWidth(i.Labels)
 				labels := ""
 				if len(i.Labels) > 0 {
 					labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
 				}
-				s.WriteString(itemStyle.Render(fmt.Sprintf("    #%d %s%s", i.Number, truncate(i.Title, 30), labels)))
+				maxTitleWidth := calculateMaxTitleWidth(m.width, labelsWidth)
+				s.WriteString(itemStyle.Render(fmt.Sprintf("    #%d %s%s", i.Number, truncate(i.Title, maxTitleWidth), labels)))
 				s.WriteString("\n")
 			}
 		}
@@ -504,6 +509,25 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+func calculateMaxTitleWidth(terminalWidth, labelsWidth int) int {
+	available := terminalWidth - issuePrefixWidth - labelsWidth - issuePadding
+	if available < issueMinTitleWidth {
+		return issueMinTitleWidth
+	}
+	return available
+}
+
+func calculateLabelsWidth(labels []string) int {
+	if len(labels) == 0 {
+		return 0
+	}
+	width := len(labels) + 2
+	for _, l := range labels {
+		width += len(l)
+	}
+	return width
 }
 
 func getRepoName(path string) string {
