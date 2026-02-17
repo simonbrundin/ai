@@ -1,8 +1,10 @@
-# AGENTS.md - Agent Coding Guidelines for ai-tui
+# AGENTS.md - Agent Coding Guidelines for ai
 
 ## Overview
 
 This is a Go-based Terminal UI application that monitors OpenCode agents and GitHub issues. It uses Bubble Tea for the TUI framework and Godog for BDD testing.
+
+**Note:** The GitHub repository is named `ai` (not `ai-tui`). Owner: `simonbrundin`.
 
 ## Build, Lint & Test Commands
 
@@ -218,3 +220,12 @@ const (
 - Test both happy path and edge cases (empty input, errors, rate limits, auth failures)
 - Document expected vs actual behavior in test comments
 - Use environment-aware tests when system state affects test results
+- Use TDD: write tests first, verify they fail, then implement
+- Godog Background steps require step definitions even if they do nothing
+
+## Issue #7: Active Window Filter Lessons
+
+- Added `IsActive` field to `Agent` struct for tracking active commands
+- Created `FilterActive()` function in agent package for filtering logic
+- BDD tests use real functions (`agent.FilterActive`) with mock data input
+- When filtering is disabled (`activeOnly=false`), return all agents unchanged

@@ -16,6 +16,7 @@ type Agent struct {
 	Name       string
 	WorkingDir string
 	PID        int
+	IsActive   bool
 }
 
 func DetectAgents() ([]Agent, error) {
@@ -93,4 +94,17 @@ func getWorkingDir(pid int) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(parts[1]), nil
+}
+
+func FilterActive(agents []Agent, activeOnly bool) []Agent {
+	if !activeOnly {
+		return agents
+	}
+	var filtered []Agent
+	for _, a := range agents {
+		if a.IsActive {
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
 }
