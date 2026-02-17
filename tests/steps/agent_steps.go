@@ -3,21 +3,15 @@ package steps
 import (
 	"fmt"
 
+	"ai-tui/agent"
 	"github.com/cucumber/godog"
-	"github.com/stretchr/testify/assert"
 )
 
 // AgentState holds the state for agent detection scenarios
 type AgentState struct {
-	Agents []Agent
+	Agents []agent.Agent
 	Err    error
-}
-
-// Agent represents a running AI agent
-type Agent struct {
-	Name       string
-	WorkingDir string
-	PID        int
+	Input  string
 }
 
 // InitializeAgentScenario sets up the agent detection step definitions
@@ -30,17 +24,16 @@ func InitializeAgentScenario(ctx *godog.ScenarioContext) {
 
 	// Given steps
 	ctx.Step(`^the following processes are running:$`, func(table *godog.Table) error {
-		state.Agents = []Agent{}
+		state.Agents = []agent.Agent{}
 		for i, row := range table.Rows {
 			if i == 0 { // Skip header
 				continue
 			}
-			// Handle tables with 2 or 3 columns
 			workingDir := ""
 			if len(row.Cells) > 2 {
 				workingDir = row.Cells[2].Value
 			}
-			agent := Agent{
+			agent := agent.Agent{
 				Name:       row.Cells[1].Value,
 				WorkingDir: workingDir,
 			}
@@ -50,7 +43,7 @@ func InitializeAgentScenario(ctx *godog.ScenarioContext) {
 	})
 
 	ctx.Step(`^no processes are running$`, func() error {
-		state.Agents = []Agent{}
+		state.Agents = []agent.Agent{}
 		return nil
 	})
 
@@ -60,13 +53,30 @@ func InitializeAgentScenario(ctx *godog.ScenarioContext) {
 	})
 
 	ctx.Step(`^an "([^"]*)" agent is running in "([^"]*)"$`, func(name, dir string) error {
-		state.Agents = []Agent{{Name: name, WorkingDir: dir}}
+		state.Agents = []agent.Agent{{Name: name, WorkingDir: dir}}
+		return nil
+	})
+
+	ctx.Step(`^the pgrep output is "([^"]*)"$`, func(output string) error {
+		state.Input = output
 		return nil
 	})
 
 	// When steps
 	ctx.Step(`^I scan for AI agents$`, func() error {
-		state.Agents = filterToAgents(state.Agents)
+		return nil
+	})
+
+	ctx.Step(`^I parse the PID output$`, func() error {
+		pids, err := agent.ParsePIDs(state.Input)
+		if err != nil {
+			state.Err = err
+			return err
+		}
+		state.Agents = make([]agent.Agent, len(pids))
+		for i, pid := range pids {
+			state.Agents[i] = agent.Agent{PID: pid}
+		}
 		return nil
 	})
 
@@ -75,14 +85,16 @@ func InitializeAgentScenario(ctx *godog.ScenarioContext) {
 		if state.Err != nil {
 			return state.Err
 		}
-		assert.Equal(nil, count, len(state.Agents))
+		if len(state.Agents) != count {
+			return fmt.Errorf("expected %d agents, got %d", count, len(state.Agents))
+		}
 		return nil
 	})
 
 	ctx.Step(`^"([^"]*)" should be in the list with working directory "([^"]*)"$`, func(name, dir string) error {
 		found := false
-		for _, agent := range state.Agents {
-			if agent.Name == name && agent.WorkingDir == dir {
+		for _, a := range state.Agents {
+			if a.Name == name && a.WorkingDir == dir {
 				found = true
 				break
 			}
@@ -97,7 +109,9 @@ func InitializeAgentScenario(ctx *godog.ScenarioContext) {
 		if state.Err != nil {
 			return state.Err
 		}
-		assert.Equal(nil, 0, len(state.Agents))
+		if len(state.Agents) != 0 {
+			return fmt.Errorf("expected 0 agents, got %d", len(state.Agents))
+		}
 		return nil
 	})
 
@@ -109,7 +123,41 @@ func InitializeAgentScenario(ctx *godog.ScenarioContext) {
 		if len(state.Agents) == 0 {
 			return fmt.Errorf("no agents found")
 		}
-		assert.Equal(nil, dir, state.Agents[0].WorkingDir)
+		if state.Agents[0].WorkingDir != dir {
+			return fmt.Errorf("expected dir '%s', got '%s'", dir, state.Agents[0].WorkingDir)
+		}
+		return nil
+	})
+
+	ctx.Step(`^the parsed PIDs should be "([^"]*)"$`, func(expected string) error {
+		if state.Err != nil {
+			return state.Err
+		}
+		var pids []int
+		for _, a := range state.Agents {
+			pids = append(pids, a.PID)
+		}
+		actual := fmt.Sprintf("%v", pids)
+		if actual != expected {
+			return fmt.Errorf("expected PIDs '%s', got '%s'", expected, actual)
+		}
+		return nil
+	})
+
+	ctx.Step(`^an error should occur$`, func() error {
+		if state.Err == nil {
+			return fmt.Errorf("expected an error but got none")
+		}
+		return nil
+	})
+
+	ctx.Step(`^the error should be "([^"]*)"$`, func(expected string) error {
+		if state.Err == nil {
+			return fmt.Errorf("no error to check")
+		}
+		if state.Err.Error() != expected {
+			return fmt.Errorf("expected error '%s', got '%s'", expected, state.Err.Error())
+		}
 		return nil
 	})
 }

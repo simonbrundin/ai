@@ -35,18 +35,3 @@ func parseInt(s string) int {
 	}
 	return n
 }
-
-var knownAgentNames = []string{"opencode", "claude", "claude-code", "aider", "devin"}
-
-func filterToAgents(agents []Agent) []Agent {
-	var result []Agent
-	for _, a := range agents {
-		for _, name := range knownAgentNames {
-			if a.Name == name {
-				result = append(result, a)
-				break
-			}
-		}
-	}
-	return result
-}

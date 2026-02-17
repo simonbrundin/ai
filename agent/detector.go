@@ -1,11 +1,16 @@
 package agent
 
 import (
+	"errors"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
-var knownAgents = []string{"opencode", "claude", "claude-code", "aider", "devin"}
+const agentName = "OpenCode"
+const agentPattern = "opencode"
+
+var ErrNoAgentsFound = errors.New("no agents found")
 
 type Agent struct {
 	Name       string
@@ -14,59 +19,78 @@ type Agent struct {
 }
 
 func DetectAgents() ([]Agent, error) {
-	cmd := exec.Command("ps", "aux")
+	pids, err := findAgentPIDs()
+	if err != nil {
+		return nil, err
+	}
+	if len(pids) == 0 {
+		return nil, ErrNoAgentsFound
+	}
+	return buildAgentList(pids)
+}
+
+func findAgentPIDs() ([]int, error) {
+	cmd := exec.Command("pgrep", "-f", agentPattern)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-
-	return parseProcessList(string(output)), nil
+	return ParsePIDs(string(output))
 }
 
-func parseProcessList(output string) []Agent {
-	var agents []Agent
-	lines := strings.Split(output, "\n")
-
+func ParsePIDs(output string) ([]int, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	var pids []int
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		parts := strings.Fields(line)
-		if len(parts) < 11 {
+		pid, err := strconv.Atoi(line)
+		if err != nil {
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids, nil
+}
+
+func buildAgentList(pids []int) ([]Agent, error) {
+	seen := make(map[string]bool)
+	var agents []Agent
+
+	for _, pid := range pids {
+		workingDir, err := getWorkingDir(pid)
+		if err != nil {
 			continue
 		}
 
-		cmd := parts[10]
-		for _, agent := range knownAgents {
-			if strings.Contains(cmd, agent) {
-				workingDir := extractWorkingDir(parts)
-				agents = append(agents, Agent{
-					Name:       agent,
-					WorkingDir: workingDir,
-				})
-				break
-			}
+		key := workingDir
+		if key == "" {
+			key = strconv.Itoa(pid)
 		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		agents = append(agents, Agent{
+			Name:       agentName,
+			WorkingDir: workingDir,
+			PID:        pid,
+		})
 	}
-	return agents
+	return agents, nil
 }
 
-func extractWorkingDir(parts []string) string {
-	if len(parts) > 10 {
-		return parts[len(parts)-1]
+func getWorkingDir(pid int) (string, error) {
+	cmd := exec.Command("pwdx", strconv.Itoa(pid))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
 	}
-	return ""
-}
-
-func FilterKnownAgents(processes []Agent) []Agent {
-	var agents []Agent
-	for _, p := range processes {
-		for _, agent := range knownAgents {
-			if p.Name == agent {
-				agents = append(agents, p)
-				break
-			}
-		}
+	parts := strings.Fields(string(out))
+	if len(parts) < 2 {
+		return "", nil
 	}
-	return agents
+	return strings.TrimSpace(parts[1]), nil
 }
