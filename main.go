@@ -29,6 +29,10 @@ var (
 
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Bold(true)
 )
 
 type model struct {
@@ -88,13 +92,13 @@ func (m *model) View() string {
 	}
 
 	if m.err != nil {
-		s += statusStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n\n"
+		s += errorStyle.Render(fmt.Sprintf("Error: %v", m.err)) + "\n\n"
 	}
 
 	s += sectionTitleStyle.Render("🤖 Running Agents") + "\n"
-	if len(m.agents) == 0 {
+	if m.err == nil && len(m.agents) == 0 {
 		s += itemStyle.Render("  No agents running") + "\n"
-	} else {
+	} else if len(m.agents) > 0 {
 		seen := make(map[string]bool)
 		for _, a := range m.agents {
 			key := a.Name + ":" + a.WorkingDir
@@ -108,9 +112,9 @@ func (m *model) View() string {
 	}
 
 	s += "\n" + sectionTitleStyle.Render("📋 GitHub Issues (alla repos)") + "\n"
-	if len(m.issues) == 0 {
+	if m.err == nil && len(m.issues) == 0 {
 		s += itemStyle.Render("  No issues found") + "\n"
-	} else {
+	} else if len(m.issues) > 0 {
 		for _, i := range m.issues {
 			labels := ""
 			if len(i.Labels) > 0 {
@@ -153,16 +157,28 @@ type refreshComplete struct {
 }
 
 func (m *model) refresh() tea.Msg {
-	agents, _ := agent.DetectAgents()
-	issues, err := fetchAllIssues()
-	return refreshComplete{agents: agents, issues: issues, err: err}
+	agents, err := agent.DetectAgents()
+	issues, fetchErr := fetchAllIssues()
+
+	var combinedErr error
+	if err != nil {
+		combinedErr = fmt.Errorf("agent detection failed: %w", err)
+	}
+	if fetchErr != nil {
+		if combinedErr != nil {
+			combinedErr = fmt.Errorf("%v; github: %w", combinedErr, fetchErr)
+		} else {
+			combinedErr = fmt.Errorf("github error: %w", fetchErr)
+		}
+	}
+	return refreshComplete{agents: agents, issues: issues, err: combinedErr}
 }
 
 func fetchAllIssues() ([]issue, error) {
 	cmd := exec.Command("gh", "repo", "list", "--limit", "50", "--json", "nameWithOwner")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh error: %w", err)
+		return nil, formatGHError(err)
 	}
 
 	var repos []struct {
@@ -173,14 +189,23 @@ func fetchAllIssues() ([]issue, error) {
 	}
 
 	var allIssues []issue
+	var errors []string
 	for _, repo := range repos {
 		cmd := exec.Command("gh", "issue", "list", "--repo", repo.NameWithOwner, "--limit", "10")
-		out, _ := cmd.Output()
+		out, cmdErr := cmd.Output()
+		if cmdErr != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", repo.NameWithOwner, cmdErr))
+			continue
+		}
 		issues := parseIssues(string(out))
 		for i := range issues {
 			issues[i].Repo = repo.NameWithOwner
 		}
 		allIssues = append(allIssues, issues...)
+	}
+
+	if len(errors) > 0 {
+		return allIssues, fmt.Errorf("failed to fetch issues from repos: %s", strings.Join(errors, "; "))
 	}
 	return allIssues, nil
 }
@@ -189,7 +214,7 @@ func fetchGitHubIssues(repo string) ([]issue, error) {
 	cmd := exec.Command("gh", "issue", "list", "--repo", repo, "--limit", "20")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh error: %w", err)
+		return nil, formatGHError(err)
 	}
 	return parseIssues(string(out)), nil
 }
@@ -218,4 +243,33 @@ func parseIssues(output string) []issue {
 		}
 	}
 	return issues
+}
+
+func formatGHError(err error) error {
+	errStr := err.Error()
+
+	switch {
+	case strings.Contains(errStr, "exec format error"),
+		strings.Contains(errStr, "not found"),
+		strings.Contains(errStr, "no such file"):
+		return fmt.Errorf("gh CLI not found. Please install GitHub CLI: https://cli.github.com")
+
+	case strings.Contains(errStr, "authentication"),
+		strings.Contains(errStr, "Auth"),
+		strings.Contains(errStr, "not authenticated"),
+		strings.Contains(errStr, "could not read"):
+		return fmt.Errorf("GitHub not authenticated. Run 'gh auth login'")
+
+	case strings.Contains(errStr, "rate limit"),
+		strings.Contains(errStr, "Rate limit"):
+		return fmt.Errorf("GitHub API rate limited. Please wait and try again")
+
+	case strings.Contains(errStr, "connection"),
+		strings.Contains(errStr, "network"),
+		strings.Contains(errStr, "no such host"):
+		return fmt.Errorf("Network error. Check your internet connection")
+
+	default:
+		return fmt.Errorf("gh error: %w", err)
+	}
 }
