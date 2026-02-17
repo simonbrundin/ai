@@ -47,4 +47,20 @@ func TestGodog(t *testing.T) {
 			t.Errorf("godog tests failed with status: %d", status)
 		}
 	})
+
+	t.Run("active_filter", func(t *testing.T) {
+		suite := godog.TestSuite{
+			Name:                 "active filter features",
+			TestSuiteInitializer: func(ctx *godog.TestSuiteContext) {},
+			ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+				steps.InitializeActiveFilterScenario(ctx)
+			},
+			Options: opts,
+		}
+
+		status := suite.Run()
+		if status != 0 {
+			t.Errorf("godog tests failed with status: %d", status)
+		}
+	})
 }
