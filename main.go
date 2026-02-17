@@ -232,6 +232,7 @@ type model struct {
 	newIssueDialogMode    string
 	newIssueErrorMessage  string
 	newIssueFilterText    string
+	newIssueTitle         string
 
 	// Phase Dialog (Issue #30)
 	showPhaseDialog bool
@@ -344,6 +345,24 @@ func tick() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Handle issue-input mode for all keys not explicitly handled
+	if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			switch keyMsg.String() {
+			case "enter", "return", "escape", "esc", "n", "y", "q", "ctrl+c",
+				"j", "k", "r", "a", "o", "p", "d", "?", "tab", "shift+tab",
+				"up", "down", "backspace":
+				// Let these be handled by their specific cases below
+			default:
+				// For all other keys (including å, ö, ä), add to input
+				if len(keyMsg.String()) > 0 {
+					m.newIssueTitle += keyMsg.String()
+					return m, nil
+				}
+			}
+		}
+	}
+
 	switch msg := msg.(type) {
 	case time.Time:
 		m.spinner = (m.spinner + 1) % len(spinners)
@@ -356,14 +375,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "q"
+				return m, nil
+			}
 			return m, tea.Quit
 		case "r":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "r"
+				return m, nil
+			}
 			m.loading = true
 			return m, m.refresh
 		case "a":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "a"
+				return m, nil
+			}
 			m.filterActive = !m.filterActive
 			return m, nil
 		case "?":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "?"
+				return m, nil
+			}
 			m.showHelp = true
 			m.helpSearch = ""
 			m.filterHelpCommands()
@@ -384,6 +419,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showNewIssueDialog = false
 				m.newIssueDialogMode = ""
 				m.newIssueFilterText = ""
+				m.newIssueTitle = ""
 				m.newIssueSelectedRepo = 0
 			}
 			if m.showPhaseDialog {
@@ -392,34 +428,77 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "tab":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "\t"
+				return m, nil
+			}
 			m.currentTab = (m.currentTab + 1) % numTabs
 			return m, nil
 		case "shift+tab":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "\t"
+				return m, nil
+			}
 			m.currentTab = (m.currentTab - 1 + numTabs) % numTabs
 			return m, nil
 		case "j":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "j"
+				return m, nil
+			}
 			m.moveToNextIssue()
 			return m, nil
 		case "k":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "k"
+				return m, nil
+			}
 			m.moveToPreviousIssue()
 			return m, nil
 		case "o":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "o"
+				return m, nil
+			}
 			return m, m.openSelectedIssueInBrowser()
 		case "p":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "p"
+				return m, nil
+			}
 			if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
 				m.openPhaseDialog()
 			}
 			return m, nil
 		case "d":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "d"
+				return m, nil
+			}
 			m.showCloseIssueDialog()
 			return m, nil
-		case "y", "enter":
+		case "y":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "y"
+				return m, nil
+			}
 			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" {
 				m.executeNewIssueSelection()
 				return m, nil
 			}
 			if m.showCommandDialog {
 				m.executeSelectedCommand()
+				return m, nil
+			}
+			m.confirmAndCloseIssue()
+			return m, nil
+		case "enter":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.executeIssueTitleInput()
+				return m, nil
+			}
+			if m.showNewIssueDialog && m.newIssueDialogMode == "repo-select" {
+				m.executeNewIssueSelection()
 				return m, nil
 			}
 			if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
@@ -436,8 +515,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.showNewIssueDialog {
+				if m.newIssueDialogMode == "issue-input" {
+					m.newIssueTitle += "n"
+					return m, nil
+				}
 				m.showNewIssueDialog = false
 				m.newIssueFilterText = ""
+				m.newIssueTitle = ""
 				return m, nil
 			}
 			if m.currentTab == tabIssues {
@@ -446,6 +530,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showConfirmDialog = false
 			return m, nil
 		case "up":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "↑"
+				return m, nil
+			}
 			if m.showCommandDialog && m.selectedCommand > 0 {
 				m.selectedCommand--
 			}
@@ -457,6 +545,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down":
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += "↓"
+				return m, nil
+			}
 			if m.showCommandDialog && m.selectedCommand < len(commandNames)-1 {
 				m.selectedCommand++
 			}
@@ -515,6 +607,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Handle issue title input mode
+		if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+			if msg.String() == "enter" || msg.String() == "return" {
+				m.executeIssueTitleInput()
+				return m, nil
+			}
+			if msg.String() == "escape" || msg.String() == "esc" || msg.String() == "n" {
+				m.newIssueDialogMode = "repo-select"
+				m.newIssueTitle = ""
+				return m, nil
+			}
+			if msg.String() == "backspace" {
+				if len(m.newIssueTitle) > 0 {
+					m.newIssueTitle = m.newIssueTitle[:len(m.newIssueTitle)-1]
+				}
+				return m, nil
+			}
+			if len(msg.String()) == 1 {
+				m.newIssueTitle += msg.String()
+				return m, nil
+			}
+			return m, nil
+		}
 		if m.showPhaseDialog {
 			if msg.String() == "enter" || msg.String() == "return" {
 				m.executePhaseSelection()
@@ -535,8 +650,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(msg.String()) == 1 {
+		if len(msg.String()) >= 1 {
 			key := msg.String()
+			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
+				m.newIssueTitle += key
+				return m, nil
+			}
 			if key >= "1" && key <= "9" {
 				tabNum := int(key[0] - '0')
 				if tabNum >= 1 && tabNum <= numTabs {
@@ -1310,6 +1429,18 @@ func (m *model) executeNewIssueSelection() {
 		return
 	}
 
+	// Transition to issue title input mode
+	m.newIssueDialogMode = "issue-input"
+	m.newIssueTitle = ""
+}
+
+func (m *model) executeIssueTitleInput() {
+	if m.newIssueTitle == "" {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "Issue title cannot be empty"
+		return
+	}
+
 	// Execute tmux command to open new window with opencode-secure
 	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue")
 	if err := cmd.Run(); err != nil {
@@ -1318,8 +1449,11 @@ func (m *model) executeNewIssueSelection() {
 		return
 	}
 
+	// Build the prompt with the issue title
+	prompt := fmt.Sprintf("--model opencode/minimax-m2.5-free --prompt \"/issue %s\"", m.newIssueTitle)
+	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, prompt)
+
 	// Send the command to the new window
-	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, opencodeIssuePrompt)
 	cmd = exec.Command("tmux", "send-keys", "-t", "opencode-issue", fullCommand, "Enter")
 	if err := cmd.Run(); err != nil {
 		m.newIssueDialogMode = "error"
@@ -1327,8 +1461,14 @@ func (m *model) executeNewIssueSelection() {
 		return
 	}
 
+	// Switch to the new window
+	selectCmd := exec.Command("bash", "-c", "tmux select-window -t opencode-issue")
+	_ = selectCmd.Run()
+
 	// Close the dialog
 	m.showNewIssueDialog = false
+	m.newIssueDialogMode = ""
+	m.newIssueTitle = ""
 	m.newIssueFilterText = ""
 }
 
@@ -1438,6 +1578,18 @@ func (m *model) renderNewIssueDialogRaw(width, height int) string {
 	if m.newIssueDialogMode == "error" {
 		content = errorStyle.Render("Error: "+m.newIssueErrorMessage) + "\n\n" +
 			mutedStyle.Render("Press any key to close...")
+	} else if m.newIssueDialogMode == "issue-input" {
+		selectedRepo := m.newIssueFilteredRepos[m.newIssueSelectedRepo]
+		repoName := selectedRepo
+		if idx := strings.LastIndex(selectedRepo, "/"); idx >= 0 {
+			repoName = selectedRepo[idx+1:]
+		}
+
+		content = titleStyle.Render("Create New Issue") + "\n\n" +
+			mutedStyle.Render("Repository: "+repoName) + "\n\n" +
+			mutedStyle.Render("Issue title:") + "\n\n" +
+			selectedItemStyle.Render("  > "+m.newIssueTitle+"_") + "\n\n\n" +
+			mutedStyle.Render("Enter: Skapa  |  Backspace: Ta bort  |  Esc: Avbryt")
 	} else {
 		content = titleStyle.Render("Create New Issue") + "\n\n" +
 			mutedStyle.Render("Select repository:") + "\n\n"
