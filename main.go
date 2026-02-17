@@ -21,6 +21,12 @@ const (
 	minHeight    = 24
 )
 
+const (
+	repoLimit   = 20
+	issueLimit  = 5
+	searchLimit = 100
+)
+
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -105,19 +111,20 @@ const (
 var spinners = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type model struct {
-	agents      []agent.Agent
-	issues      []issue
-	loading     bool
-	err         error
-	repo        string
-	spinner     int
-	currentTab  int
-	showHelp    bool
-	helpSearch  string
-	helpMatches []string
-	width       int
-	height      int
-	ready       bool
+	agents       []agent.Agent
+	issues       []issue
+	loading      bool
+	err          error
+	repo         string
+	spinner      int
+	currentTab   int
+	showHelp     bool
+	helpSearch   string
+	helpMatches  []string
+	width        int
+	height       int
+	ready        bool
+	filterActive bool
 }
 
 const (
@@ -137,6 +144,7 @@ var allCommands = []struct {
 	{"tab", "next", "Next tab"},
 	{"shift+tab", "prev", "Previous tab"},
 	{"r", "refresh", "Refresh data"},
+	{"a", "active", "Toggle active filter"},
 	{"q", "quit", "Exit application"},
 	{"?", "help", "Show help"},
 	{"esc", "close", "Close help"},
@@ -238,6 +246,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.loading = true
 			return m, m.refresh
+		case "a":
+			m.filterActive = !m.filterActive
+			return m, nil
 		case "?":
 			m.showHelp = true
 			m.helpSearch = ""
@@ -354,53 +365,9 @@ func (m *model) renderContent(width, height int) string {
 	var s strings.Builder
 
 	if m.currentTab == tabAgents {
-		s.WriteString(sectionTitleStyle.Render("🤖 Running Agents"))
-		s.WriteString("\n")
-		if len(m.agents) == 0 && m.err == nil {
-			s.WriteString(itemStyle.Render("  No agents running"))
-			s.WriteString("\n")
-		} else if len(m.agents) > 0 {
-			seen := make(map[string]bool)
-			for _, a := range m.agents {
-				key := a.Name + ":" + a.WorkingDir
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				repoName := getRepoName(a.WorkingDir)
-				s.WriteString(itemStyle.Render(fmt.Sprintf("  • OpenCode @ %s", repoName)))
-				s.WriteString("\n")
-			}
-		}
+		s.WriteString(m.renderAgentsView())
 	} else {
-		s.WriteString(sectionTitleStyle.Render("📋 GitHub Issues"))
-		s.WriteString("\n")
-		if len(m.issues) == 0 && m.err == nil {
-			s.WriteString(itemStyle.Render("  No issues found"))
-			s.WriteString("\n")
-		} else if len(m.issues) > 0 {
-			// Group issues by repository
-			grouped := groupIssuesByRepo(m.issues)
-			repoNames := sortedRepoKeys(grouped)
-
-			// Render each repo group with heading
-			for _, repoName := range repoNames {
-				issues := grouped[repoName]
-				// Render repo heading
-				s.WriteString(itemStyle.Render(fmt.Sprintf("  📁 %s", repoName)))
-				s.WriteString("\n")
-
-				// Render issues under this repo
-				for _, i := range issues {
-					labels := ""
-					if len(i.Labels) > 0 {
-						labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
-					}
-					s.WriteString(itemStyle.Render(fmt.Sprintf("    #%d %s%s", i.Number, truncate(i.Title, 30), labels)))
-					s.WriteString("\n")
-				}
-			}
-		}
+		s.WriteString(m.renderIssuesView())
 	}
 
 	if m.err != nil {
@@ -413,10 +380,80 @@ func (m *model) renderContent(width, height int) string {
 	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
 }
 
+func (m *model) renderAgentsView() string {
+	var s strings.Builder
+
+	agentsToShow := m.agents
+	if m.filterActive {
+		agentsToShow = agent.FilterActive(m.agents, true)
+		s.WriteString(mutedStyle.Render("  [Filtering: active only]"))
+		s.WriteString("\n")
+	}
+
+	s.WriteString(sectionTitleStyle.Render("🤖 Running Agents"))
+	s.WriteString("\n")
+
+	if len(agentsToShow) == 0 && m.err == nil {
+		s.WriteString(itemStyle.Render("  No agents running"))
+		s.WriteString("\n")
+	} else if len(agentsToShow) > 0 {
+		seen := make(map[string]bool)
+		for _, a := range agentsToShow {
+			key := a.Name + ":" + a.WorkingDir
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			repoName := getRepoName(a.WorkingDir)
+			s.WriteString(itemStyle.Render(fmt.Sprintf("  • OpenCode @ %s", repoName)))
+			s.WriteString("\n")
+		}
+	}
+
+	return s.String()
+}
+
+func (m *model) renderIssuesView() string {
+	var s strings.Builder
+
+	s.WriteString(sectionTitleStyle.Render("📋 GitHub Issues"))
+	s.WriteString("\n")
+
+	if len(m.issues) == 0 && m.err == nil {
+		s.WriteString(itemStyle.Render("  No issues found"))
+		s.WriteString("\n")
+	} else if len(m.issues) > 0 {
+		grouped := groupIssuesByRepo(m.issues)
+		repoNames := sortedRepoKeys(grouped)
+
+		for _, repoName := range repoNames {
+			issues := grouped[repoName]
+			s.WriteString(itemStyle.Render(fmt.Sprintf("  📁 %s", repoName)))
+			s.WriteString("\n")
+
+			for _, i := range issues {
+				labels := ""
+				if len(i.Labels) > 0 {
+					labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
+				}
+				s.WriteString(itemStyle.Render(fmt.Sprintf("    #%d %s%s", i.Number, truncate(i.Title, 30), labels)))
+				s.WriteString("\n")
+			}
+		}
+	}
+
+	return s.String()
+}
+
 func (m *model) renderFooter() string {
+	filterStatus := "a: all"
+	if m.filterActive {
+		filterStatus = "a: active"
+	}
 	hints := []string{
 		"1-2: tab",
 		"r: refresh",
+		filterStatus,
 		"q: quit",
 		"?: help",
 	}
