@@ -111,6 +111,10 @@ var (
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("141"))
 
+	phaseLabelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("82")).
+			Bold(true)
+
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241"))
 
@@ -695,6 +699,10 @@ func (m *model) View() string {
 
 	s.WriteString(m.renderFooter())
 
+	if m.showNewIssueDialog {
+		return m.renderNewIssueDialogOverlay(s.String())
+	}
+
 	if m.showConfirmDialog {
 		return m.renderConfirmDialog(s.String())
 	}
@@ -763,13 +771,6 @@ func (m *model) renderContent(width, height int) string {
 		s.WriteString("\n")
 	}
 
-	// Render New Issue Dialog on top of content
-	if m.showNewIssueDialog {
-		dialog := m.renderNewIssueDialog(width, height)
-		s.WriteString("\n")
-		s.WriteString(dialog)
-	}
-
 	content := s.String()
 	return lipgloss.NewStyle().Width(width).Height(height).Render(content)
 }
@@ -831,7 +832,15 @@ func (m *model) renderIssuesView() string {
 				labelsWidth := calculateLabelsWidth(i.Labels)
 				labels := ""
 				if len(i.Labels) > 0 {
-					labels = " " + labelStyle.Render(fmt.Sprintf("[%s]", strings.Join(i.Labels, ", ")))
+					var labelParts []string
+					for _, l := range i.Labels {
+						if isPhaseLabel(l) {
+							labelParts = append(labelParts, phaseLabelStyle.Render(l))
+						} else {
+							labelParts = append(labelParts, labelStyle.Render(l))
+						}
+					}
+					labels = " [" + strings.Join(labelParts, ", ") + "]"
 				}
 				maxTitleWidth := calculateMaxTitleWidth(m.width, labelsWidth)
 
@@ -916,6 +925,11 @@ func (m *model) renderHelpOverlay(content string) string {
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpContent)
+}
+
+func (m *model) renderNewIssueDialogOverlay(content string) string {
+	dialog := m.renderNewIssueDialogRaw(m.width, m.height)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 func (m *model) renderConfirmDialog(content string) string {
@@ -1151,6 +1165,15 @@ func parseIssues(output string) []issue {
 		}
 	}
 	return issues
+}
+
+func isPhaseLabel(label string) bool {
+	for _, p := range phaseLabels {
+		if p == label {
+			return true
+		}
+	}
+	return false
 }
 
 func formatGHError(err error) error {
@@ -1396,6 +1419,67 @@ func (m *model) renderNewIssueDialog(width, height int) string {
 		Foreground(lipgloss.Color("252")).
 		Padding(1)
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-		dialog.Render(content))
+	return dialog.Render(content)
+}
+
+func (m *model) renderNewIssueDialogRaw(width, height int) string {
+	dialogWidth := newIssueDialogWidth
+	dialogHeight := newIssueDialogHeight
+
+	if dialogWidth > width-4 {
+		dialogWidth = width - 4
+	}
+	if dialogHeight > height-4 {
+		dialogHeight = height - 4
+	}
+
+	var content string
+
+	if m.newIssueDialogMode == "error" {
+		content = errorStyle.Render("Error: "+m.newIssueErrorMessage) + "\n\n" +
+			mutedStyle.Render("Press any key to close...")
+	} else {
+		content = titleStyle.Render("Create New Issue") + "\n\n" +
+			mutedStyle.Render("Select repository:") + "\n\n"
+
+		if m.newIssueFilterText != "" {
+			content += mutedStyle.Render("Filter: ") + m.newIssueFilterText + "\n\n"
+		}
+
+		maxVisible := dialogHeight - 10
+		if len(m.newIssueFilteredRepos) > maxVisible {
+			m.newIssueFilteredRepos = m.newIssueFilteredRepos[:maxVisible]
+		}
+
+		for i, repo := range m.newIssueFilteredRepos {
+			prefix := "   "
+			style := mutedStyle
+			if i == m.newIssueSelectedRepo {
+				prefix = " > "
+				style = selectedItemStyle
+			}
+			repoName := repo
+			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+				repoName = repo[idx+1:]
+			}
+			content += style.Render(fmt.Sprintf("%s%s", prefix, repoName)) + "\n"
+		}
+
+		if len(m.newIssueFilteredRepos) == 0 {
+			content += mutedStyle.Render("No repositories found") + "\n"
+		}
+
+		content += "\n" + mutedStyle.Render("↑/↓: navigate  1-9: select  Enter: confirm  n/Esc: close")
+	}
+
+	dialog := lipgloss.NewStyle().
+		Width(dialogWidth).
+		Height(dialogHeight).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("205")).
+		Background(lipgloss.Color("236")).
+		Foreground(lipgloss.Color("252")).
+		Padding(1)
+
+	return dialog.Render(content)
 }
