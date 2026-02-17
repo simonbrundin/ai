@@ -31,6 +31,15 @@ const (
 	confirmTitleTruncate = 30
 )
 
+const (
+	commandDialogWidth  = 40
+	commandDialogHeight = 14
+	defaultWorkingDir   = "/home/simon/repos/ai"
+)
+
+var commandNames = []string{"Skriv tester", "Implementera", "Refactor", "Dokumentera", "Skapa PR"}
+var commandAliases = []string{"/tdd", "/implement", "/refactor", "/docs", "/pr"}
+
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -122,6 +131,30 @@ var (
 					Foreground(lipgloss.Color("205")).
 					Bold(true)
 
+	commandDialogStyle = lipgloss.NewStyle().
+				Width(commandDialogWidth).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("205")).
+				Foreground(lipgloss.Color("252")).
+				Background(lipgloss.Color("236")).
+				Padding(1)
+
+	commandDialogTitleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("205")).
+				Bold(true).
+				Padding(0, 0, 1, 0)
+
+	commandDialogItemStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252"))
+
+	commandDialogSelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("15")).
+					Background(lipgloss.Color("205")).
+					Bold(true)
+
+	commandDialogHintStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("245"))
+
 	boxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("205")).
@@ -159,15 +192,17 @@ type model struct {
 	selectedIssue     int
 	issueURL          string
 	showConfirmDialog bool
+	showCommandDialog bool
+	selectedCommand   int
 }
 
 const (
-	tabAgents = iota
-	tabIssues
+	tabIssues = iota
+	tabAgents
 	numTabs = 2
 )
 
-var tabNames = []string{"Agents", "Issues"}
+var tabNames = []string{"Issues", "Agents"}
 
 var allCommands = []struct {
 	key   string
@@ -299,6 +334,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.showConfirmDialog {
 				m.showConfirmDialog = false
 			}
+			if m.showCommandDialog {
+				m.showCommandDialog = false
+				m.selectedCommand = -1
+			}
 			return m, nil
 		case "tab":
 			m.currentTab = (m.currentTab + 1) % numTabs
@@ -318,10 +357,34 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showCloseIssueDialog()
 			return m, nil
 		case "y", "enter":
+			if m.showCommandDialog {
+				m.executeSelectedCommand()
+				return m, nil
+			}
+			if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+				m.showCommandDialog = true
+				m.selectedCommand = 0
+				return m, nil
+			}
 			m.confirmAndCloseIssue()
 			return m, nil
 		case "n":
+			if m.showCommandDialog {
+				m.showCommandDialog = false
+				m.selectedCommand = -1
+				return m, nil
+			}
 			m.showConfirmDialog = false
+			return m, nil
+		case "up":
+			if m.showCommandDialog && m.selectedCommand > 0 {
+				m.selectedCommand--
+			}
+			return m, nil
+		case "down":
+			if m.showCommandDialog && m.selectedCommand < len(commandNames)-1 {
+				m.selectedCommand++
+			}
 			return m, nil
 		}
 		if m.showHelp {
@@ -335,6 +398,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filterHelpCommands()
 			}
 			return m, nil
+		}
+		if m.showCommandDialog && len(msg.String()) == 1 {
+			key := msg.String()
+			if key >= "1" && key <= "5" {
+				m.selectedCommand = int(key[0] - '1')
+				m.executeSelectedCommand()
+				return m, nil
+			}
 		}
 		if len(msg.String()) == 1 {
 			key := msg.String()
@@ -399,6 +470,37 @@ func (m *model) confirmAndCloseIssue() {
 	m.showConfirmDialog = false
 }
 
+func (m *model) executeSelectedCommand() {
+	if !m.showCommandDialog || m.selectedCommand < 0 || m.selectedCommand >= len(commandAliases) {
+		return
+	}
+	if m.selectedIssue < 0 || m.selectedIssue >= len(m.issues) {
+		m.showCommandDialog = false
+		m.selectedCommand = -1
+		return
+	}
+
+	issue := m.issues[m.selectedIssue]
+	command := commandAliases[m.selectedCommand]
+	issueNum := issue.Number
+
+	cmd := exec.Command("tmux", "new-window", "-a", "-t", "0", "-n", fmt.Sprintf("opencode %s %d", command, issueNum),
+		"bash", "-c", fmt.Sprintf("cd %s && echo 'Running: %s %d' && sleep 1", defaultWorkingDir, command, issueNum))
+
+	err := cmd.Run()
+	if err != nil {
+		m.err = fmt.Errorf("failed to execute command: %w", err)
+	}
+
+	err = closeGitHubIssue(issue.Repo, issueNum)
+	if err != nil {
+		m.err = fmt.Errorf("failed to close issue: %w", err)
+	}
+
+	m.showCommandDialog = false
+	m.selectedCommand = -1
+}
+
 func (m *model) View() string {
 	if !m.ready {
 		return "Loading..."
@@ -422,6 +524,10 @@ func (m *model) View() string {
 
 	if m.showConfirmDialog {
 		return m.renderConfirmDialog(s.String())
+	}
+
+	if m.showCommandDialog {
+		return m.renderCommandDialog(s.String())
 	}
 
 	if m.showHelp {
@@ -658,6 +764,38 @@ func (m *model) renderConfirmDialog(content string) string {
 	}
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, confirmContent)
+}
+
+func (m *model) renderCommandDialog(content string) string {
+	var s strings.Builder
+
+	issueNum := 0
+	issueTitle := ""
+	if m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+		issueNum = m.issues[m.selectedIssue].Number
+		issueTitle = m.issues[m.selectedIssue].Title
+	}
+
+	s.WriteString(commandDialogTitleStyle.Render("Välj kommando för issue #" + fmt.Sprint(issueNum)))
+	s.WriteString("\n\n")
+	s.WriteString(commandDialogItemStyle.Render("  " + truncate(issueTitle, 30)))
+	s.WriteString("\n\n")
+
+	for i, cmdName := range commandNames {
+		if i == m.selectedCommand {
+			s.WriteString(commandDialogSelectedStyle.Render(fmt.Sprintf("  > %d. %s ", i+1, cmdName)))
+		} else {
+			s.WriteString(commandDialogItemStyle.Render(fmt.Sprintf("    %d. %s", i+1, cmdName)))
+		}
+		s.WriteString("\n")
+	}
+
+	s.WriteString("\n")
+	s.WriteString(commandDialogHintStyle.Render("  Enter: Kör  |  ↑↓: Navigera  |  1-5: Snabbval  |  Esc: Avbryt"))
+
+	commandContent := commandDialogStyle.Render(s.String())
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, commandContent)
 }
 
 func truncate(s string, maxLen int) string {
