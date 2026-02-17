@@ -218,3 +218,12 @@ const (
 - Test both happy path and edge cases (empty input, errors, rate limits, auth failures)
 - Document expected vs actual behavior in test comments
 - Use environment-aware tests when system state affects test results
+- Use TDD: write tests first, verify they fail, then implement
+- Godog Background steps require step definitions even if they do nothing
+
+## Issue #7: Active Window Filter Lessons
+
+- Added `IsActive` field to `Agent` struct for tracking active commands
+- Created `FilterActive()` function in agent package for filtering logic
+- BDD tests use real functions (`agent.FilterActive`) with mock data input
+- When filtering is disabled (`activeOnly=false`), return all agents unchanged
