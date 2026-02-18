@@ -490,8 +490,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.executeSelectedCommand()
 				return m, nil
 			}
-			m.confirmAndCloseIssue()
-			return m, nil
+			return m, m.confirmAndCloseIssue()
 		case "enter":
 			if m.showNewIssueDialog && m.newIssueDialogMode == "issue-input" {
 				m.executeIssueTitleInput()
@@ -501,13 +500,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.executeNewIssueSelection()
 				return m, nil
 			}
+			if m.showConfirmDialog {
+				return m, m.confirmAndCloseIssue()
+			}
 			if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
 				m.showCommandDialog = true
 				m.selectedCommand = 0
 				return m, nil
 			}
-			m.confirmAndCloseIssue()
-			return m, nil
 		case "n":
 			if m.showCommandDialog {
 				m.showCommandDialog = false
@@ -792,16 +792,31 @@ func (m *model) showCloseIssueDialog() {
 	}
 }
 
-func (m *model) confirmAndCloseIssue() {
+func (m *model) confirmAndCloseIssue() tea.Cmd {
 	if !m.showConfirmDialog || m.selectedIssue < 0 || m.selectedIssue >= len(m.issues) {
-		return
+		return nil
 	}
 	issue := m.issues[m.selectedIssue]
 	err := closeGitHubIssue(issue.Repo, issue.Number)
 	if err != nil {
 		m.err = fmt.Errorf("failed to close issue: %w", err)
+		m.showConfirmDialog = false
+		m.loading = false
+		return nil
 	}
 	m.showConfirmDialog = false
+	m.loading = true
+
+	return func() tea.Msg {
+		for i := 0; i < 10; i++ {
+			time.Sleep(200 * time.Millisecond)
+			isClosed, checkErr := checkIssueClosed(issue.Repo, issue.Number)
+			if checkErr == nil && isClosed {
+				return m.refresh()
+			}
+		}
+		return m.refresh()
+	}
 }
 
 func (m *model) executeSelectedCommand() {
@@ -1394,6 +1409,23 @@ func closeGitHubIssue(repo string, number int) error {
 		return formatGHError(fmt.Errorf("%s: %s", err.Error(), errStr))
 	}
 	return nil
+}
+
+// checkIssueClosed verifies an issue is closed in GitHub
+func checkIssueClosed(repo string, number int) (bool, error) {
+	cmd := exec.Command("gh", "issue", "view", "--repo", repo, fmt.Sprintf("%d", number), "--json", "state")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, formatGHError(fmt.Errorf("%s: %s", err.Error(), string(out)))
+	}
+
+	var result struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return false, err
+	}
+	return result.State == "CLOSED", nil
 }
 
 // addIssueLabel adds a label to an issue in GitHub using gh CLI
