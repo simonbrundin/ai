@@ -766,18 +766,30 @@ func (m *model) executePhaseSelection() {
 	phaseLabel := phaseLabels[m.selectedPhase]
 
 	issue := &m.issues[m.selectedIssue]
-	alreadyHasLabel := false
+
+	if err := ensureLabelExists(issue.Repo, phaseLabel); err != nil {
+		m.err = fmt.Errorf("failed to ensure label exists: %w", err)
+		m.showPhaseDialog = false
+		m.selectedPhase = -1
+		return
+	}
+
+	var newLabels []string
 	for _, l := range issue.Labels {
-		if l == phaseLabel {
-			alreadyHasLabel = true
-			break
+		if isPhaseLabel(l) {
+			if err := removeIssueLabel(issue.Repo, issue.Number, l); err != nil {
+				m.err = fmt.Errorf("failed to remove phase label: %w", err)
+			}
+		} else {
+			newLabels = append(newLabels, l)
 		}
 	}
+	issue.Labels = newLabels
 
 	err := addIssueLabel(issue.Repo, issue.Number, phaseLabel)
 	if err != nil {
 		m.err = fmt.Errorf("failed to add label: %w", err)
-	} else if !alreadyHasLabel {
+	} else {
 		issue.Labels = append(issue.Labels, phaseLabel)
 	}
 
@@ -1015,16 +1027,17 @@ func (m *model) renderIssuesView() string {
 			for _, i := range issues {
 				labelsWidth := calculateLabelsWidth(i.Labels)
 				labels := ""
-				if len(i.Labels) > 0 {
-					var labelParts []string
-					for _, l := range i.Labels {
-						if isPhaseLabel(l) {
-							labelParts = append(labelParts, phaseLabelStyle.Render(l))
-						} else {
-							labelParts = append(labelParts, labelStyle.Render(l))
-						}
+				phase := ""
+				var otherLabels []string
+				for _, l := range i.Labels {
+					if isPhaseLabel(l) {
+						phase = phaseLabelStyle.Render(fmt.Sprintf("(%s)", l))
+					} else {
+						otherLabels = append(otherLabels, labelStyle.Render(l))
 					}
-					labels = " [" + strings.Join(labelParts, ", ") + "]"
+				}
+				if len(otherLabels) > 0 {
+					labels = " [" + strings.Join(otherLabels, ", ") + "]"
 				}
 				maxTitleWidth := calculateMaxTitleWidth(m.width, labelsWidth)
 
@@ -1039,7 +1052,7 @@ func (m *model) renderIssuesView() string {
 					currentStyle = selectedItemStyle
 				}
 
-				s.WriteString(currentStyle.Render(fmt.Sprintf("%s#%d %s%s", prefix, i.Number, truncate(i.Title, maxTitleWidth), labels)))
+				s.WriteString(currentStyle.Render(fmt.Sprintf("%s#%d %s%s%s", prefix, i.Number, truncate(i.Title, maxTitleWidth), labels, phase)))
 				s.WriteString("\n")
 			}
 		}
@@ -1236,11 +1249,25 @@ func calculateLabelsWidth(labels []string) int {
 	if len(labels) == 0 {
 		return 0
 	}
-	width := len(labels) + 2
-	for _, l := range labels {
+	nonPhaseLabels := filterNonPhaseLabels(labels)
+	if len(nonPhaseLabels) == 0 {
+		return 0
+	}
+	width := len(nonPhaseLabels) + 2
+	for _, l := range nonPhaseLabels {
 		width += len(l)
 	}
 	return width
+}
+
+func filterNonPhaseLabels(labels []string) []string {
+	var result []string
+	for _, l := range labels {
+		if !isPhaseLabel(l) {
+			result = append(result, l)
+		}
+	}
+	return result
 }
 
 func getRepoName(path string) string {
@@ -1448,6 +1475,59 @@ func addIssueLabel(repo string, number int, label string) error {
 		return formatGHError(fmt.Errorf("%s: %s", err.Error(), errStr))
 	}
 	return nil
+}
+
+// removeIssueLabel removes a label from an issue in GitHub using gh CLI
+func removeIssueLabel(repo string, number int, label string) error {
+	cmd := exec.Command("gh", "issue", "edit", "--repo", repo, fmt.Sprintf("%d", number), "--remove-label", label)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		errStr := string(out)
+		if strings.Contains(errStr, "not found") {
+			return fmt.Errorf("issue #%d not found in %s", number, repo)
+		}
+		return formatGHError(fmt.Errorf("%s: %s", err.Error(), errStr))
+	}
+	return nil
+}
+
+// ensureLabelExists checks if a label exists in a repository and creates it if not
+func ensureLabelExists(repo, label string) error {
+	listCmd := exec.Command("gh", "label", "list", "--repo", repo, "--limit", "100")
+	out, err := listCmd.Output()
+	if err != nil {
+		return formatGHError(fmt.Errorf("failed to list labels: %w", err))
+	}
+	if strings.Contains(strings.ToLower(string(out)), strings.ToLower(label)) {
+		return nil
+	}
+
+	description := getPhaseLabelDescription(label)
+	createCmd := exec.Command("gh", "label", "create", label, "--repo", repo, "--description", description)
+	out, err = createCmd.CombinedOutput()
+	if err != nil {
+		errStr := string(out)
+		if strings.Contains(errStr, "already exists") {
+			return nil
+		}
+		return formatGHError(fmt.Errorf("failed to create label: %w: %s", err, errStr))
+	}
+	return nil
+}
+
+func getPhaseLabelDescription(label string) string {
+	descriptions := map[string]string{
+		"tester":         "Issue is in test phase",
+		"implementation": "Issue is in implementation phase",
+		"refactor":       "Issue is in refactor phase",
+		"docs":           "Issue is in documentation phase",
+		"user_test":      "Issue is in user test phase",
+		"pr":             "Issue is in PR phase",
+	}
+	if desc, ok := descriptions[label]; ok {
+		return desc
+	}
+	return fmt.Sprintf("Phase: %s", label)
 }
 
 // =============================================================================
