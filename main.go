@@ -853,7 +853,43 @@ func (m *model) executeSelectedCommand() {
 	issueNum := issue.Number
 	command := commandAliases[m.selectedCommand]
 
-	cmd := exec.Command("tmux", "new-window", "-d", "-n", fmt.Sprintf("opencode-%s-%d", command, issueNum))
+	selectedRepo := issue.Repo
+	if selectedRepo == "" {
+		m.err = fmt.Errorf("no repository associated with this issue")
+		m.showCommandDialog = false
+		m.selectedCommand = -1
+		return
+	}
+
+	localRepoPath := getLocalRepoPath(selectedRepo)
+	muxProject := findMatchingTmuxinatorSession(selectedRepo)
+	sessionName := muxProject
+	if sessionName == "" {
+		sessionName = strings.ReplaceAll(selectedRepo, "/", "-")
+	}
+
+	checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
+	if err := checkCmd.Run(); err != nil {
+		if muxProject != "" {
+			startCmd := exec.Command("tmuxinator", "start", muxProject, "-d")
+			if err := startCmd.Run(); err != nil {
+				m.err = fmt.Errorf("failed to start tmuxinator project: %w", err)
+				m.showCommandDialog = false
+				m.selectedCommand = -1
+				return
+			}
+		} else {
+			createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName, "-n", "main")
+			if err := createCmd.Run(); err != nil {
+				m.err = fmt.Errorf("failed to create tmux session: %w", err)
+				m.showCommandDialog = false
+				m.selectedCommand = -1
+				return
+			}
+		}
+	}
+
+	cmd := exec.Command("tmux", "new-window", "-d", "-n", fmt.Sprintf("opencode-%s-%d", command, issueNum), "-t", sessionName, "-c", localRepoPath)
 	if err := cmd.Run(); err != nil {
 		m.err = fmt.Errorf("failed to create tmux window: %w", err)
 		m.showCommandDialog = false
@@ -861,15 +897,18 @@ func (m *model) executeSelectedCommand() {
 		return
 	}
 
+	time.Sleep(500 * time.Millisecond)
+
 	prompt := fmt.Sprintf("--model opencode/minimax-m2.5-free --prompt \"%s %d\"", command, issueNum)
 	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, prompt)
-	cmd = exec.Command("tmux", "send-keys", "-t", fmt.Sprintf("opencode-%s-%d", command, issueNum), fullCommand, "Enter")
+
+	cmd = exec.Command("tmux", "send-keys", "-t", fmt.Sprintf("%s:opencode-%s-%d", sessionName, command, issueNum), fullCommand, "Enter")
 	if err := cmd.Run(); err != nil {
 		m.err = fmt.Errorf("failed to run opencode-secure: %w", err)
 	}
 
 	windowName := fmt.Sprintf("opencode-%s-%d", command, issueNum)
-	selectCmd := exec.Command("bash", "-c", fmt.Sprintf("tmux select-window -t %q", windowName))
+	selectCmd := exec.Command("bash", "-c", fmt.Sprintf("tmux select-window -t %s:%s && tmux switch-client -t %s", sessionName, windowName, sessionName))
 	_ = selectCmd.Run()
 
 	m.showCommandDialog = false
