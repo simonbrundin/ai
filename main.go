@@ -503,6 +503,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.showConfirmDialog {
 				return m, m.confirmAndCloseIssue()
 			}
+			if m.showPhaseDialog {
+				m.executePhaseSelection()
+				return m, nil
+			}
+			if m.showCommandDialog {
+				m.executeSelectedCommand()
+				return m, nil
+			}
 			if m.currentTab == tabIssues && len(m.issues) > 0 && m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
 				m.showCommandDialog = true
 				m.selectedCommand = 0
