@@ -1444,6 +1444,9 @@ func (m *model) executeIssueTitleInput() {
 	// Get the selected repo
 	selectedRepo := m.newIssueFilteredRepos[m.newIssueSelectedRepo]
 
+	// Convert GitHub repo name to local path
+	localRepoPath := getLocalRepoPath(selectedRepo)
+
 	// Try to find a matching tmuxinator session
 	muxProject := findMatchingTmuxinatorSession(selectedRepo)
 	sessionName := muxProject
@@ -1475,12 +1478,14 @@ func (m *model) executeIssueTitleInput() {
 	}
 
 	// Execute tmux command to open new window in the repo's session
-	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue", "-t", sessionName)
+	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue", "-t", sessionName, "-c", localRepoPath)
 	if err := cmd.Run(); err != nil {
 		m.newIssueDialogMode = "error"
 		m.newIssueErrorMessage = "Failed to create tmux window"
 		return
 	}
+
+	time.Sleep(500 * time.Millisecond)
 
 	// Build the prompt with the issue title
 	prompt := fmt.Sprintf("--model opencode/minimax-m2.5-free --prompt \"/issue %s\"", m.newIssueTitle)
@@ -1488,11 +1493,7 @@ func (m *model) executeIssueTitleInput() {
 
 	// Send the command to the new window in the repo's session
 	cmd = exec.Command("tmux", "send-keys", "-t", fmt.Sprintf("%s:opencode-issue", sessionName), fullCommand, "Enter")
-	if err := cmd.Run(); err != nil {
-		m.newIssueDialogMode = "error"
-		m.newIssueErrorMessage = "Failed to run opencode-secure"
-		return
-	}
+	_ = cmd.Run()
 
 	// Switch to the new window in the repo's session
 	selectCmd := exec.Command("bash", "-c", fmt.Sprintf("tmux select-window -t %s:opencode-issue && tmux switch-client -t %s", sessionName, sessionName))
@@ -1503,6 +1504,15 @@ func (m *model) executeIssueTitleInput() {
 	m.newIssueDialogMode = ""
 	m.newIssueTitle = ""
 	m.newIssueFilterText = ""
+}
+
+func getLocalRepoPath(githubRepo string) string {
+	parts := strings.Split(githubRepo, "/")
+	if len(parts) != 2 {
+		return ""
+	}
+	repoName := parts[1]
+	return "/home/simon/repos/" + repoName
 }
 
 func findMatchingTmuxinatorSession(repo string) string {
