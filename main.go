@@ -676,18 +676,62 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) moveToNextIssue() {
 	if m.currentTab == tabIssues && len(m.issues) > 0 {
-		if m.selectedIssue < len(m.issues)-1 {
-			m.selectedIssue++
+		grouped := groupIssuesByRepo(m.issues)
+		repoNames := sortedRepoKeys(grouped)
+		visualOrder := buildVisualOrder(grouped, repoNames)
+
+		currentIdx := -1
+		for i, iss := range visualOrder {
+			if iss.Number == m.issues[m.selectedIssue].Number && iss.Repo == m.issues[m.selectedIssue].Repo {
+				currentIdx = i
+				break
+			}
+		}
+
+		if currentIdx >= 0 && currentIdx < len(visualOrder)-1 {
+			nextIssue := visualOrder[currentIdx+1]
+			for i, iss := range m.issues {
+				if iss.Number == nextIssue.Number && iss.Repo == nextIssue.Repo {
+					m.selectedIssue = i
+					break
+				}
+			}
 		}
 	}
 }
 
 func (m *model) moveToPreviousIssue() {
 	if m.currentTab == tabIssues && len(m.issues) > 0 {
-		if m.selectedIssue > 0 {
-			m.selectedIssue--
+		grouped := groupIssuesByRepo(m.issues)
+		repoNames := sortedRepoKeys(grouped)
+		visualOrder := buildVisualOrder(grouped, repoNames)
+
+		currentIdx := -1
+		for i, iss := range visualOrder {
+			if iss.Number == m.issues[m.selectedIssue].Number && iss.Repo == m.issues[m.selectedIssue].Repo {
+				currentIdx = i
+				break
+			}
+		}
+
+		if currentIdx > 0 {
+			prevIssue := visualOrder[currentIdx-1]
+			for i, iss := range m.issues {
+				if iss.Number == prevIssue.Number && iss.Repo == prevIssue.Repo {
+					m.selectedIssue = i
+					break
+				}
+			}
 		}
 	}
+}
+
+func buildVisualOrder(grouped map[string][]issue, repoNames []string) []issue {
+	var visualOrder []issue
+	for _, repoName := range repoNames {
+		visualOrder = append(visualOrder, grouped[repoName]...)
+	}
+	return visualOrder
 }
 
 func (m *model) openPhaseDialog() {
@@ -940,8 +984,6 @@ func (m *model) renderIssuesView() string {
 		grouped := groupIssuesByRepo(m.issues)
 		repoNames := sortedRepoKeys(grouped)
 
-		globalIndex := 0
-
 		for _, repoName := range repoNames {
 			issues := grouped[repoName]
 			s.WriteString(itemStyle.Render(fmt.Sprintf("  📁 %s", repoName)))
@@ -965,15 +1007,17 @@ func (m *model) renderIssuesView() string {
 
 				prefix := "    "
 				currentStyle := itemStyle
-				if globalIndex == m.selectedIssue {
+				selectedIssuePtr := -1
+				if m.selectedIssue >= 0 && m.selectedIssue < len(m.issues) {
+					selectedIssuePtr = m.issues[m.selectedIssue].Number
+				}
+				if selectedIssuePtr == i.Number && m.issues[m.selectedIssue].Repo == i.Repo {
 					prefix = "  > "
 					currentStyle = selectedItemStyle
 				}
 
 				s.WriteString(currentStyle.Render(fmt.Sprintf("%s#%d %s%s", prefix, i.Number, truncate(i.Title, maxTitleWidth), labels)))
 				s.WriteString("\n")
-
-				globalIndex++
 			}
 		}
 	}
@@ -1429,9 +1473,77 @@ func (m *model) executeNewIssueSelection() {
 		return
 	}
 
-	// Transition to issue title input mode
-	m.newIssueDialogMode = "issue-input"
+	// Get the selected repo
+	selectedRepo := m.newIssueFilteredRepos[m.newIssueSelectedRepo]
+
+	// Convert GitHub repo name to local path
+	localRepoPath := getLocalRepoPath(selectedRepo)
+
+	// Try to find a matching tmuxinator session
+	muxProject := findMatchingTmuxinatorSession(selectedRepo)
+	sessionName := muxProject
+	if sessionName == "" {
+		sessionName = strings.ReplaceAll(selectedRepo, "/", "-")
+	}
+
+	// Check if tmux session exists
+	checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
+	if err := checkCmd.Run(); err != nil {
+		// Session doesn't exist
+		if muxProject != "" {
+			// Use tmuxinator to start the project
+			startCmd := exec.Command("tmuxinator", "start", muxProject, "-d")
+			if err := startCmd.Run(); err != nil {
+				m.newIssueDialogMode = "error"
+				m.newIssueErrorMessage = "Failed to start tmuxinator project"
+				return
+			}
+		} else {
+			// Create new session manually
+			createCmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName, "-n", "main")
+			if err := createCmd.Run(); nil != err {
+				m.newIssueDialogMode = "error"
+				m.newIssueErrorMessage = "Failed to create tmux session"
+				return
+			}
+		}
+	}
+
+	// Execute tmux command to open new window in the repo's session
+	cmd := exec.Command("tmux", "new-window", "-d", "-n", "opencode-issue", "-t", sessionName, "-c", localRepoPath)
+	if err := cmd.Run(); err != nil {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "Failed to create tmux window"
+		return
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Build the prompt with /issue (title will be entered in the new tab)
+	prompt := fmt.Sprintf("--model opencode/minimax-m2.5-free --prompt \"/issue\"")
+	fullCommand := fmt.Sprintf("%s %s", opencodeSecurePath, prompt)
+
+	// Send the command to the new window in the repo's session
+	cmd = exec.Command("tmux", "send-keys", "-t", fmt.Sprintf("%s:opencode-issue", sessionName), fullCommand, "Enter")
+	if err := cmd.Run(); err != nil {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "Failed to send command to tmux window"
+		return
+	}
+
+	// Switch to the new window in the repo's session
+	selectCmd := exec.Command("bash", "-c", fmt.Sprintf("tmux select-window -t %s:opencode-issue && tmux switch-client -t %s", sessionName, sessionName))
+	if err := selectCmd.Run(); err != nil {
+		m.newIssueDialogMode = "error"
+		m.newIssueErrorMessage = "Failed to switch to tmux window"
+		return
+	}
+
+	// Close the dialog
+	m.showNewIssueDialog = false
+	m.newIssueDialogMode = ""
 	m.newIssueTitle = ""
+	m.newIssueFilterText = ""
 }
 
 func (m *model) executeIssueTitleInput() {
