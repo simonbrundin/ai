@@ -1,2 +1,17 @@
 {"ts":"2026-02-17T16:54:25.101280032+01:00","cmd":"init","session":"ses_e19dd5","ok":true,"dur_ms":111}
 {"ts":"2026-02-17T16:55:53.412442337+01:00","cmd":"list","flags":{"json":"true","limit":"500","status":"[\"open,in_progress,in_review\"]"},"session":"ses_e19dd5","ok":true,"dur_ms":23}
+{"ts":"2026-02-17T19:21:22.534074881+01:00","cmd":"version","flags":{"short":"true"},"session":"ses_bbf9ee","ok":true,"dur_ms":0}
+{"ts":"2026-02-17T19:30:25.12443143+01:00","cmd":"version","flags":{"short":"true"},"session":"ses_bbf9ee","ok":true,"dur_ms":0}
+{"ts":"2026-02-17T20:11:04.124447447+01:00","cmd":"usage","flags":{"quiet":"true"},"session":"ses_bbf9ee","ok":true,"dur_ms":34}
+{"ts":"2026-02-17T23:44:44.008665177+01:00","cmd":"usage","flags":{"quiet":"true"},"session":"ses_e19dd5","ok":true,"dur_ms":104}
+{"ts":"2026-02-18T00:14:53.060055987+01:00","cmd":"usage","flags":{"quiet":"true"},"session":"ses_e19dd5","ok":true,"dur_ms":99}
+{"ts":"2026-02-18T00:14:56.190704663+01:00","cmd":"usage","session":"ses_e19dd5","ok":true,"dur_ms":93}
+{"ts":"2026-02-18T00:14:59.284344651+01:00","cmd":"next","session":"ses_e19dd5","ok":true,"dur_ms":3}
+{"ts":"2026-02-18T02:18:04.705130253+01:00","cmd":"usage","flags":{"quiet":"true"},"session":"ses_e19dd5","ok":true,"dur_ms":188}
+{"ts":"2026-02-18T02:18:08.043273402+01:00","cmd":"usage","flags":{"new-session":"true"},"session":"ses_19189e","ok":true,"dur_ms":180}
+{"ts":"2026-02-18T02:18:11.351515457+01:00","cmd":"list","session":"ses_19189e","ok":true,"dur_ms":3}
+{"ts":"2026-03-06T13:08:59.298382861+01:00","cmd":"version","flags":{"short":"true"},"session":"ses_19189e","ok":true,"dur_ms":0}
+{"ts":"2026-03-06T14:34:02.799627319+01:00","cmd":"version","flags":{"short":"true"},"session":"ses_19189e","ok":true,"dur_ms":0}
+{"ts":"2026-03-10T20:16:23.004737866+01:00","cmd":"version","flags":{"short":"true"},"session":"ses_19189e","ok":true,"dur_ms":1}
+{"ts":"2026-04-16T11:12:25.078891051+02:00","cmd":"version","flags":{"short":"true"},"session":"ses_19189e","ok":true,"dur_ms":1}
+{"ts":"2026-04-29T11:56:55.54274486+02:00","cmd":"version","flags":{"short":"true"},"session":"ses_19189e","ok":true,"dur_ms":0}

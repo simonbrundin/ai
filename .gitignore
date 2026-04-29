@@ -1,2 +1,8 @@
 .sidecar-pr
 .todos/
+.sidecar/
+.sidecar-agent
+.sidecar-task
+.sidecar-start.sh
+.sidecar-base
+.td-root
